@@ -1,0 +1,25 @@
+[Unit]
+Description=Vision tracker (YOLO + webcam, port 8001)
+After=network.target
+
+[Service]
+Type=simple
+User=testv1
+Group=testv1
+WorkingDirectory=/home/testv1/drone/vision-tracker
+Environment=PYTHONUNBUFFERED=1
+Environment=VISION_CAPTURE_WIDTH=480
+Environment=VISION_PREVIEW_MAX_WIDTH=480
+Environment=VISION_PREVIEW_JPEG_QUALITY=50
+Environment=VISION_YOLO_IMGSZ=256
+Environment=VISION_BUFFER_DRAIN=6
+Environment=VISION_DETECT_EVERY=2
+Environment=VISION_LOCK_DETECT_EVERY=2
+Environment=VISION_OPENCV_TRACKER_KIND=KCF
+EnvironmentFile=-/home/testv1/drone/vision-tracker/.env
+ExecStart=/home/testv1/drone/vision-tracker/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8001
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

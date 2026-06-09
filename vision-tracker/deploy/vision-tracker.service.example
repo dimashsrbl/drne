@@ -1,0 +1,16 @@
+[Unit]
+Description=Vision tracker (FastAPI stub / future YOLO)
+After=network.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/home/pi/drone/vision-tracker
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/pi/drone/vision-tracker/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8001
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

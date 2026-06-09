@@ -1,0 +1,869 @@
+/* ── Корневой layout НС ───────────────────────────────────────── */
+.gcsRoot {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  color: var(--gcs-text);
+}
+
+.gcsHeader {
+  display: grid;
+  grid-template-columns: minmax(200px, 1.1fr) minmax(0, 2.2fr) auto;
+  align-items: center;
+  gap: 16px 20px;
+  padding: 14px 20px 12px;
+  background: linear-gradient(180deg, rgba(6, 14, 10, 0.98) 0%, rgba(3, 8, 5, 0.92) 100%);
+  border-bottom: 1px solid var(--gcs-border);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
+  position: relative;
+  z-index: 4;
+}
+
+.gcsHeader::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--gcs-accent-glow), transparent);
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.gcsHeader__left {
+  min-width: 0;
+}
+
+.gcsHeader__right {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.gcsLogo {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.gcsLogo__mark {
+  width: 10px;
+  height: 40px;
+  border-radius: 3px;
+  background: linear-gradient(180deg, var(--gcs-accent-bright), var(--gcs-accent-dim));
+  box-shadow: 0 0 18px var(--gcs-accent-glow);
+  flex-shrink: 0;
+}
+
+.gcsLogo__title {
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--gcs-text-soft);
+}
+
+.gcsLogo__sub {
+  font-size: 12px;
+  color: var(--gcs-muted);
+  margin-top: 2px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.gcsLogo__profile {
+  color: var(--gcs-accent-bright);
+  font-weight: 600;
+}
+
+.gcsLogo__sep {
+  opacity: 0.45;
+}
+
+.gcsLogo__code {
+  font-size: 11px;
+}
+
+.gcsLogo__muted {
+  opacity: 0.65;
+}
+
+.gcsNav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  align-items: center;
+}
+
+.gcsNavLink {
+  text-decoration: none;
+  color: var(--gcs-muted);
+  padding: 8px 14px;
+  border-radius: var(--gcs-radius-sm);
+  border: 1px solid transparent;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  transition:
+    color 0.15s ease,
+    border-color 0.15s ease,
+    background 0.15s ease,
+    box-shadow 0.15s ease;
+  white-space: nowrap;
+}
+
+.gcsNavLink:hover {
+  color: var(--gcs-text-soft);
+  background: rgba(74, 222, 128, 0.06);
+  border-color: rgba(74, 222, 128, 0.15);
+}
+
+.gcsNavLink--active {
+  color: var(--gcs-bg);
+  background: linear-gradient(180deg, var(--gcs-accent-bright), var(--gcs-accent));
+  border-color: var(--gcs-border-strong);
+  box-shadow: 0 0 20px var(--gcs-accent-glow);
+}
+
+.gcsApiPill {
+  font-size: 11px;
+  font-family: var(--gcs-mono);
+  color: var(--gcs-muted);
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--gcs-border);
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.gcsApiPill__path {
+  color: var(--gcs-accent-bright);
+  font-weight: 700;
+}
+
+/* ── Глобальная полоса телеметрии ─────────────────────────────── */
+.telStrip {
+  background: rgba(2, 6, 4, 0.92);
+  border-bottom: 1px solid var(--gcs-border);
+  position: relative;
+  z-index: 3;
+}
+
+.telStrip__inner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 0;
+  padding: 8px 12px 10px 16px;
+  max-width: 1920px;
+  margin: 0 auto;
+}
+
+.telStrip__brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-right: 16px;
+  margin-right: 8px;
+  border-right: 1px solid var(--gcs-border);
+}
+
+.telStrip__pulse {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--gcs-muted);
+  box-shadow: 0 0 0 0 rgba(74, 222, 128, 0.4);
+}
+
+.telStrip__pulse[data-state='open'] {
+  background: var(--gcs-accent);
+  box-shadow: 0 0 12px var(--gcs-accent-glow);
+  animation: telPulse 2s ease-in-out infinite;
+}
+
+.telStrip__pulse[data-state='connecting'] {
+  background: var(--gcs-warning);
+  animation: telBlink 0.9s ease-in-out infinite;
+}
+
+.telStrip__pulse[data-state='closed'] {
+  background: var(--gcs-danger);
+}
+
+@keyframes telPulse {
+  50% {
+    box-shadow: 0 0 18px rgba(74, 222, 128, 0.55);
+  }
+}
+
+@keyframes telBlink {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.telStrip__brandText {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.2em;
+  color: var(--gcs-muted);
+}
+
+.telCell {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  padding: 4px 14px 6px;
+  min-width: 0;
+  border-right: 1px solid rgba(74, 222, 128, 0.08);
+}
+
+.telCell--wide {
+  flex: 1 1 120px;
+  max-width: 220px;
+}
+
+.telCell--battery {
+  min-width: 100px;
+  flex: 0 0 auto;
+}
+
+.telCell__label {
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  color: var(--gcs-muted);
+}
+
+.telCell__value {
+  font-family: var(--gcs-mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--gcs-text-soft);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.telAccent {
+  color: var(--gcs-accent-bright);
+}
+
+.telAccent--armed {
+  color: var(--gcs-accent-bright);
+  text-shadow: 0 0 12px var(--gcs-accent-glow);
+}
+
+.telMuted {
+  color: var(--gcs-muted);
+}
+
+.telNote {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--gcs-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.telBatt {
+  position: relative;
+  height: 22px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.45);
+  border: 1px solid var(--gcs-border);
+  overflow: hidden;
+  min-width: 72px;
+}
+
+.telBatt__fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  background: linear-gradient(90deg, var(--gcs-accent-dim), var(--gcs-accent));
+  box-shadow: inset 0 0 12px rgba(255, 255, 255, 0.12);
+  transition: width 0.35s ease;
+}
+
+.telBatt__fill[data-low='1'] {
+  background: linear-gradient(90deg, #991b1b, var(--gcs-danger));
+}
+
+.telBatt__text {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  font-family: var(--gcs-mono);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--gcs-text);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+}
+
+/* ── Основная область ──────────────────────────────────────────── */
+.gcsMain {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: auto;
+  padding: 18px 20px 28px;
+  width: 100%;
+  max-width: 1920px;
+  margin: 0 auto;
+}
+
+.gcsSimRoot {
+  margin: -18px -20px -28px;
+  flex: 1;
+  min-height: 480px;
+}
+
+@media (max-width: 720px) {
+  .telStrip__inner {
+    padding: 8px;
+  }
+  .telCell {
+    padding: 4px 10px;
+    border-right: none;
+    border-bottom: 1px solid rgba(74, 222, 128, 0.06);
+    flex: 1 1 45%;
+  }
+  .telStrip__brand {
+    width: 100%;
+    border-right: none;
+    border-bottom: 1px solid var(--gcs-border);
+    padding-bottom: 8px;
+    margin-bottom: 4px;
+  }
+}
+
+@media (max-width: 1100px) {
+  .gcsHeader {
+    grid-template-columns: 1fr;
+    text-align: center;
+  }
+  .gcsHeader__left,
+  .gcsHeader__right {
+    justify-self: center;
+  }
+  .gcsLogo {
+    justify-content: center;
+  }
+  .gcsNav {
+    justify-content: center;
+  }
+}
+
+/* ── Сетка страниц ───────────────────────────────────────────── */
+.grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  align-content: start;
+}
+
+@media (max-width: 920px) {
+  .grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ── Карточки (тактический модуль) ───────────────────────────── */
+.card {
+  background: var(--gcs-surface);
+  border: 1px solid var(--gcs-border);
+  border-radius: var(--gcs-radius);
+  padding: 16px 18px;
+  backdrop-filter: blur(12px);
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.35);
+  position: relative;
+}
+
+.card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  padding: 1px;
+  opacity: 0.5;
+}
+
+.cardTitle {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--gcs-muted);
+  margin-bottom: 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.cardTitle::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, var(--gcs-border-strong), transparent);
+}
+
+.subtitle {
+  font-size: 13px;
+  color: var(--gcs-muted);
+  line-height: 1.5;
+}
+
+.kv {
+  display: grid;
+  grid-template-columns: 110px 1fr;
+  gap: 8px 14px;
+  font-family: var(--gcs-mono);
+  font-size: 13px;
+}
+
+.k {
+  color: var(--gcs-muted);
+  font-weight: 500;
+}
+
+.v {
+  color: var(--gcs-text-soft);
+  font-weight: 600;
+}
+
+.row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.btn {
+  border: 1px solid var(--gcs-border);
+  background: rgba(0, 0, 0, 0.35);
+  color: var(--gcs-text-soft);
+  padding: 10px 14px;
+  border-radius: var(--gcs-radius-sm);
+  cursor: pointer;
+  transition:
+    transform 0.06s ease,
+    background 0.15s ease,
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.btn:hover {
+  background: rgba(74, 222, 128, 0.1);
+  border-color: var(--gcs-border-strong);
+  color: var(--gcs-text);
+}
+
+.btn:active {
+  transform: translateY(1px);
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.btn.primary {
+  background: linear-gradient(180deg, rgba(110, 231, 160, 0.25), rgba(34, 197, 94, 0.18));
+  border-color: var(--gcs-border-strong);
+  color: var(--gcs-accent-bright);
+  box-shadow: 0 0 16px rgba(74, 222, 128, 0.12);
+}
+
+.btn.primary:hover {
+  box-shadow: 0 0 22px var(--gcs-accent-glow);
+}
+
+.btn.danger {
+  background: var(--gcs-danger-bg);
+  border-color: rgba(251, 113, 133, 0.45);
+  color: #fecdd3;
+}
+
+.field {
+  display: grid;
+  gap: 6px;
+  min-width: 200px;
+}
+
+.field span {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--gcs-muted);
+}
+
+.field input {
+  padding: 10px 12px;
+  border-radius: var(--gcs-radius-sm);
+  border: 1px solid var(--gcs-border);
+  background: rgba(0, 0, 0, 0.45);
+  color: var(--gcs-text);
+  font-family: var(--gcs-mono);
+  font-size: 14px;
+}
+
+.field input:focus {
+  outline: none;
+  border-color: var(--gcs-accent);
+  box-shadow: 0 0 0 1px var(--gcs-accent-glow);
+}
+
+.hint {
+  font-size: 12px;
+  color: var(--gcs-muted);
+  margin-top: 8px;
+  line-height: 1.45;
+}
+
+.alert {
+  background: var(--gcs-danger-bg);
+  border: 1px solid rgba(251, 113, 133, 0.35);
+  border-radius: var(--gcs-radius);
+  padding: 12px 14px;
+  margin-bottom: 14px;
+}
+
+.alertTitle {
+  font-weight: 700;
+  margin-bottom: 6px;
+  color: #fecdd3;
+  font-size: 13px;
+}
+
+.alertBody {
+  font-family: var(--gcs-mono);
+  font-size: 12px;
+  color: rgba(254, 252, 232, 0.9);
+}
+
+.pill {
+  background: rgba(74, 222, 128, 0.1);
+  border: 1px solid var(--gcs-border);
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--gcs-accent-bright);
+  white-space: nowrap;
+}
+
+/* ── Пульт ───────────────────────────────────────────────────── */
+.pultWrap {
+  display: grid;
+  gap: 16px;
+  max-width: 960px;
+  margin: 0 auto;
+}
+
+.pultGrid {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 28px 40px;
+}
+
+.pultMid {
+  min-width: 140px;
+  padding-top: 28px;
+}
+
+.stickPad {
+  position: relative;
+  width: 150px;
+  height: 150px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 28%, rgba(74, 222, 128, 0.12), rgba(0, 0, 0, 0.5));
+  border: 2px solid var(--gcs-border);
+  box-shadow:
+    inset 0 0 28px rgba(0, 0, 0, 0.5),
+    0 0 20px rgba(74, 222, 128, 0.06);
+  cursor: grab;
+}
+
+.stickPad:active {
+  cursor: grabbing;
+}
+
+.stickKnob {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: linear-gradient(145deg, rgba(110, 231, 160, 0.95), rgba(22, 163, 74, 0.75));
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  box-shadow: 0 4px 18px rgba(74, 222, 128, 0.25);
+  pointer-events: none;
+}
+
+.pultSticks {
+  min-height: 320px;
+}
+
+/* ── Mission Control layout ───────────────────────────────────── */
+.missionControlLayout {
+  display: grid;
+  grid-template-columns: 320px 1fr 300px;
+  grid-template-rows: minmax(420px, 1fr) auto;
+  grid-template-areas:
+    'left center right'
+    'bottom bottom bottom';
+  gap: 14px;
+}
+
+.missionTopLeft {
+  grid-area: left;
+  display: grid;
+  gap: 14px;
+  align-content: start;
+}
+
+.missionCenter {
+  grid-area: center;
+  min-width: 0;
+}
+
+.missionRight {
+  grid-area: right;
+  display: grid;
+  gap: 14px;
+  align-content: start;
+}
+
+.missionBottom {
+  grid-area: bottom;
+}
+
+.missionViewportCard {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.missionViewportHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.missionModeSwitch {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.missionViewportSurface {
+  min-height: 420px;
+  height: 100%;
+  border-radius: var(--gcs-radius-sm);
+  overflow: hidden;
+  border: 1px solid var(--gcs-border);
+  background: rgba(2, 6, 4, 0.65);
+  position: relative;
+}
+
+.missionSimSurface,
+.missionVisionSurface {
+  display: flex;
+  flex-direction: column;
+}
+
+.missionSimCanvas {
+  width: 100%;
+  height: 100%;
+  min-height: 390px;
+  display: block;
+}
+
+.missionSimHint {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  font-size: 12px;
+  background: var(--gcs-hud-bg);
+  border: 1px solid var(--gcs-border);
+  border-radius: var(--gcs-radius-sm);
+  padding: 6px 10px;
+  color: var(--gcs-muted);
+}
+
+.missionVisionStream {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  min-height: 390px;
+  background: var(--gcs-black-pure);
+}
+
+.missionVisionOverlay {
+  position: absolute;
+  left: 10px;
+  top: 10px;
+  display: flex;
+  gap: 8px;
+}
+
+.missionVisionStats {
+  position: absolute;
+  right: 10px;
+  top: 10px;
+  font-size: 12px;
+  display: grid;
+  gap: 4px;
+  background: var(--gcs-hud-bg);
+  border: 1px solid var(--gcs-border);
+  border-radius: var(--gcs-radius-sm);
+  padding: 8px 10px;
+  font-family: var(--gcs-mono);
+  color: var(--gcs-muted);
+}
+
+.missionInlineAlert {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: 10px;
+  margin: 0;
+}
+
+.missionBottomPanel {
+  padding-bottom: 12px;
+}
+
+.missionWaypointList {
+  margin-top: 8px;
+  max-height: 180px;
+  overflow: auto;
+  display: grid;
+  gap: 8px;
+}
+
+.missionWaypointRow {
+  display: grid;
+  grid-template-columns: 40px 1fr 1fr 72px auto;
+  gap: 8px;
+  align-items: center;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--gcs-border);
+  border-radius: var(--gcs-radius-sm);
+  padding: 8px 10px;
+  font-family: var(--gcs-mono);
+  font-size: 12px;
+  color: var(--gcs-text-soft);
+}
+
+.missionKv .v {
+  color: var(--gcs-accent-bright);
+}
+
+.missionCompassWrap {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+}
+
+.missionCompass {
+  width: 120px;
+  height: 120px;
+  border-radius: 50%;
+  border: 2px solid var(--gcs-border-strong);
+  position: relative;
+  background: radial-gradient(circle, rgba(74, 222, 128, 0.1) 0%, rgba(3, 8, 5, 0.85) 70%);
+  box-shadow: inset 0 0 24px rgba(0, 0, 0, 0.4);
+}
+
+.missionCompassRose {
+  position: absolute;
+  left: 50%;
+  top: 4px;
+  transform: translateX(-50%);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--gcs-muted);
+}
+
+.missionCompassRoseS {
+  top: auto;
+  bottom: 4px;
+}
+
+.missionCompassRoseE {
+  left: auto;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.missionCompassRoseW {
+  left: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.missionCompassNeedle {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 2px;
+  height: 44px;
+  background: linear-gradient(180deg, var(--gcs-accent-bright) 0%, var(--gcs-accent-bright) 50%, var(--gcs-muted) 50%, var(--gcs-muted) 100%);
+  transform-origin: 50% 100%;
+}
+
+.missionCompassMeta {
+  flex: 1;
+  display: grid;
+  gap: 8px;
+}
+
+.missionGauge {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--gcs-muted);
+}
+
+.missionGauge b {
+  font-family: var(--gcs-mono);
+  color: var(--gcs-text-soft);
+}
+
+@media (max-width: 1380px) {
+  .missionControlLayout {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto;
+    grid-template-areas:
+      'left'
+      'center'
+      'right'
+      'bottom';
+  }
+}

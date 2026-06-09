@@ -1,0 +1,17 @@
+[Unit]
+Description=Drone backend (Betaflight MSP + mission, port 8000)
+After=network.target
+
+[Service]
+Type=simple
+User=testv1
+Group=testv1
+WorkingDirectory=/home/testv1/drone/backend
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-/home/testv1/drone/backend/.env
+ExecStart=/home/testv1/drone/backend/.venv/bin/uvicorn app.main_mission_only:app --host 0.0.0.0 --port 8000
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

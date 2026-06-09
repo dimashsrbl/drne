@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+pydantic
+pydantic-settings
+pymavlink
+pyserial
+opencv-python-headless
+numpy
+ultralytics

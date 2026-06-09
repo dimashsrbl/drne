@@ -1,0 +1,71 @@
+/* Наземная станция — палитра: чёрный / зелёный / белый */
+:root {
+  --gcs-bg: #030806;
+  --gcs-bg-2: #07120c;
+  --gcs-elevated: rgba(10, 22, 16, 0.88);
+  --gcs-surface: rgba(8, 18, 12, 0.75);
+  --gcs-border: rgba(74, 222, 128, 0.2);
+  --gcs-border-strong: rgba(74, 222, 128, 0.42);
+  --gcs-accent: #4ade80;
+  --gcs-accent-bright: #6ee7a0;
+  --gcs-accent-dim: #15803d;
+  --gcs-accent-glow: rgba(74, 222, 128, 0.28);
+  --gcs-danger: #fb7185;
+  --gcs-danger-bg: rgba(251, 113, 133, 0.12);
+  --gcs-warning: #facc15;
+  --gcs-text: #f0fdf4;
+  --gcs-text-soft: #dcfce7;
+  --gcs-muted: #7d9a84;
+  --gcs-hud-bg: rgba(3, 8, 5, 0.82);
+  --gcs-black-pure: #020403;
+  --gcs-radius: 12px;
+  --gcs-radius-sm: 8px;
+  --gcs-font: 'Segoe UI', system-ui, -apple-system, Roboto, sans-serif;
+  --gcs-mono: ui-monospace, 'Cascadia Code', 'SF Mono', Menlo, Consolas, monospace;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  min-height: 100%;
+  font: 15px/1.45 var(--gcs-font);
+  color: var(--gcs-text);
+  background-color: var(--gcs-bg);
+  background-image:
+    radial-gradient(ellipse 120% 80% at 50% -20%, rgba(34, 197, 94, 0.12), transparent 55%),
+    linear-gradient(180deg, var(--gcs-bg-2) 0%, var(--gcs-bg) 40%, #010302 100%);
+  background-attachment: fixed;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#root {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+code {
+  font-family: var(--gcs-mono);
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: rgba(74, 222, 128, 0.08);
+  border: 1px solid var(--gcs-border);
+  color: var(--gcs-accent-bright);
+}
+
+::selection {
+  background: rgba(74, 222, 128, 0.35);
+  color: var(--gcs-text);
+}
