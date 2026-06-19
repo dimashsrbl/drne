@@ -10,7 +10,7 @@ import serial
 from app.core.config import settings
 from app.schemas.betaflight import BetaflightSequenceStartRequest, BetaflightSequenceStep, BetaflightTrackStartRequest
 from app.services.betaflight_port_lock import PortBusyError, betaflight_port_lock
-from app.services.inav_msp import build_msp_v1
+from app.services.inav_msp import build_msp_v1, msp_allow_arming, msp_rc_sticks_to_frame
 
 MSP_API_VERSION = 1
 MSP_FC_VARIANT = 2
@@ -269,9 +269,9 @@ class BetaflightRcRunner:
 
         diag = {
             "mode_flags": mode_flags,
-            "arm_box_active": arm_box_active,
-            "msp_rc_arm_us": msp_rc_arm,
-            "msp_rc": rc_values[:8] if rc_values else None,
+            "arm_box_active": int(arm_box_active),
+            "msp_rc_arm_us": msp_rc_arm if msp_rc_arm is not None else -1,
+            "msp_rc": ",".join(str(v) for v in rc_values[:8]) if rc_values else "",
         }
         detail = "MSP link OK"
         if msp_rc_arm is not None and msp_rc_arm < 1700:
@@ -442,6 +442,8 @@ class BetaflightRcRunner:
             with betaflight_port_lock():
                 with serial.Serial(cfg.port, baudrate=cfg.baud, timeout=0.2) as ser:
                     self._ser = ser
+                    with self._serial_io_lock:
+                        msp_allow_arming(ser)
                     self._rc_streamer = MspRcStreamer(ser, cfg.hz, cfg.channels, self._serial_io_lock)
                     self._rc_streamer.start()
                     time.sleep(0.3)
@@ -499,6 +501,8 @@ class BetaflightRcRunner:
             with betaflight_port_lock():
                 with serial.Serial(cfg.port, baudrate=cfg.baud, timeout=0.2) as ser:
                     self._ser = ser
+                    with self._serial_io_lock:
+                        msp_allow_arming(ser)
                     self._rc_streamer = MspRcStreamer(ser, cfg.hz, cfg.channels, self._serial_io_lock)
                     self._rc_streamer.start()
                     time.sleep(0.3)
@@ -1094,7 +1098,7 @@ class BetaflightRcRunner:
         *,
         roll_us: int | None = None,
         pitch_us: int | None = None,
-        throttle_us: int = 1000,
+        throttle_us: int | None = None,
         yaw_us: int | None = None,
         arm_us: int = 1000,
         angle_us: int | None = None,
@@ -1108,7 +1112,14 @@ class BetaflightRcRunner:
         r = settings.betaflight_stick_center_roll_us if roll_us is None else roll_us
         p = settings.betaflight_stick_center_pitch_us if pitch_us is None else pitch_us
         y = settings.betaflight_stick_center_yaw_us if yaw_us is None else yaw_us
-        values = [_clamp(r), _clamp(p), _clamp(throttle_us), _clamp(y)]
+        t = settings.betaflight_idle_throttle_us if throttle_us is None else throttle_us
+        values = msp_rc_sticks_to_frame(
+            roll_us=_clamp(r),
+            pitch_us=_clamp(p),
+            throttle_us=_clamp(t),
+            yaw_us=_clamp(y),
+            rc_map=settings.betaflight_rc_map,
+        )
         while len(values) < channels_count:
             values.append(1500)
         if 1 <= arm_channel <= channels_count:

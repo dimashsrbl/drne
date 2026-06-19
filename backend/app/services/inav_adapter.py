@@ -411,7 +411,7 @@ class InavMavlinkAdapter:
                 snap.mode = _MODE_BY_NUM.get(int(custom_mode), f"MODE_{int(custom_mode)}")
             snap.status = "idle" if not snap.armed else "flying"
             snap.updated_at_monotonic = now
-            return snap
+            return snap 
 
         if mtype == "VFR_HUD":
             snap.speed = round(float(getattr(msg, "groundspeed", 0)), 2)

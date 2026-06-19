@@ -53,6 +53,7 @@ class UnitySimAdapter:
         self._rx_thread: threading.Thread | None = None
         self._stop = threading.Event()
         self._state = _UnityState()
+        self._armed = False
 
     # ------------------------------------------------------------------
     # lifecycle
@@ -130,9 +131,11 @@ class UnitySimAdapter:
             self._cmd_sock.sendto(payload, self._cmd_addr)
 
     def arm(self) -> None:
+        self._armed = True
         self._send({"type": "arm"})
 
     def disarm(self) -> None:
+        self._armed = False
         self._send({"type": "disarm"})
 
     def takeoff(self, altitude_m: float, no_gps: bool = False) -> None:
@@ -152,6 +155,31 @@ class UnitySimAdapter:
     def manual_control(self, pitch: int, roll: int, thrust: int, yaw: int) -> None:
         # диапазоны как в UI: pitch/roll/yaw -1000..1000, thrust 0..1000
         self._send({"type": "manual", "pitch": int(pitch), "roll": int(roll), "yaw": int(yaw), "thrust": int(thrust)})
+        if settings.unity_protocol_v2:
+            self._send_rc_v2(int(roll), int(pitch), int(thrust), int(yaw))
+
+    @staticmethod
+    def _stick_to_us(value: int) -> int:
+        return int(max(1000, min(2000, 1500 + int(value) // 2)))
+
+    @staticmethod
+    def _thrust_to_us(thrust: int) -> int:
+        return int(max(988, min(2000, 1000 + int(thrust))))
+
+    def _send_rc_v2(self, roll: int, pitch: int, thrust: int, yaw: int) -> None:
+        arm_us = 2000 if self._armed else 988
+        angle_us = 2000
+        channels = [
+            self._stick_to_us(roll),
+            self._stick_to_us(pitch),
+            self._thrust_to_us(thrust),
+            self._stick_to_us(yaw),
+            arm_us,
+            angle_us,
+            1000,
+            1000,
+        ]
+        self._send({"v": 2, "type": "rc", "channels": channels, "arm": self._armed})
 
     def set_home_global(self, lat: float, lon: float, alt_amsl_m: float) -> None:
         self._send({"type": "set_home", "lat": float(lat), "lon": float(lon), "alt": float(alt_amsl_m)})
@@ -188,6 +216,8 @@ class UnitySimAdapter:
             snap.heading = float(msg.get("yaw")) if msg.get("yaw") is not None else None
             snap.armed = bool(msg.get("armed")) if msg.get("armed") is not None else None
             snap.mode = str(msg.get("mode")) if msg.get("mode") is not None else None
+            if msg.get("baro_alt") is not None:
+                snap.alt = float(msg.get("baro_alt"))
             snap.status = "connected"
             snap.updated_at_monotonic = time.monotonic()
 

@@ -92,6 +92,10 @@ class Settings(BaseSettings):
     # Удержание ARM перед взлётом; Betaflight disarm, если MSP RC пропадает.
     betaflight_arm_hold_s: float = 3.0
     betaflight_arm_switch_us: int = 2000
+    # Газ «стоп» для ARM/disarm: rcData[THROTTLE] < mincheck (строго, не 1000 при mincheck=1000).
+    betaflight_idle_throttle_us: int = 988
+    # Порядок первых 4 каналов MSP SET_RAW_RC — как ``map`` в Betaflight CLI (AETR1234 / AERT1234).
+    betaflight_rc_map: str = "AETR"
     betaflight_emergency_land_s: float = 30.0
 
     # Vision-tracker + режим follow (localhost:8001 на Pi).
@@ -117,6 +121,8 @@ class Settings(BaseSettings):
     unity_cmd_port: int = 15000
     # Backend слушает телеметрию от Unity на udp://0.0.0.0:<unity_telem_port>
     unity_telem_port: int = 15001
+    # Дублировать manual-control как v2 RC (AETR µs) для новой физики Unity
+    unity_protocol_v2: bool = True
 
 
 settings = Settings()

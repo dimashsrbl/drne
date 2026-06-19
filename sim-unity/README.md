@@ -1,45 +1,36 @@
-## Unity симулятор (MVP) — управление через наш Backend
+## Unity симулятор — геймпад → Unity (без браузера)
 
-Цель: **Tango 2 / геймпад → Frontend → Backend → Unity** (ручное управление + миссии).
+**Геймпад USB → Unity → физика → камера.** Backend и браузер **не нужны** для полёта.
 
-Unity играет роль "виртуального полётника": принимает команды по UDP и отправляет телеметрию по UDP.
+### Запуск (только Unity)
 
-### Требования
-- Windows + Unity **2022 LTS** (или любая LTS)
-- Наш backend запущен с профилем `unity_sim`
+1. Сцена: **Plane** + **Drone** (`Rigidbody` + `DroneSimBootstrap`)
+2. Пульт по **USB**
+3. **Play ▶**
+4. **Start** = ARM → газ → летишь
+5. **C** = камера FPV/chase
 
-### Сеть/порты (по умолчанию)
-- Unity слушает команды: `udp://127.0.0.1:15000`
-- Backend слушает телеметрию: `udp://0.0.0.0:15001`
+В левом верхнем углу Game — HUD с именем пульта.
 
-Настраивается через `.env`:
+### Bootstrap настройки (Inspector)
 
-```env
-DRONE_BACKEND_PROFILE=unity_sim
-DRONE_UNITY_CMD_HOST=127.0.0.1
-DRONE_UNITY_CMD_PORT=15000
-DRONE_UNITY_TELEM_PORT=15001
-```
+| Поле | По умолчанию | Зачем |
+|------|--------------|-------|
+| **Use Local Gamepad** | ✅ | Прямой геймпад |
+| **Use Backend Udp** | ❌ | Только если нужен backend |
 
-### Шаги в Unity (самый простой старт)
-1) Создай новый 3D проект.
-2) Создай объект `Drone` (Empty) и добавь к нему:
-   - `Rigidbody`
-   - `UnitySimDroneController`
-   - `UnityUdpBridge`
-3) В `Drone` добавь примитивы для вида (Cube для корпуса, 4 цилиндра для моторов — как хочешь).
-4) Создай `Plane` как землю.
-5) Запусти Play.
+### Backend (опционально)
+
+Нужен **только** если хочешь тот же путь, что прод (`React → backend → Unity`).  
+Для «просто полетать» — **не запускай**.
 
 ### Скрипты
-Скрипты лежат в `sim-unity/Assets/Scripts/`.
-Скопируй папку `Assets` в свой Unity проект (или просто эти `.cs` в `Assets/Scripts/`).
 
-### Что должно работать
-- `manual-control` из нашего UI будет наклонять/ускорять "дрон" (Rigidbody).
-- `/api/telemetry/ws` начнёт показывать `lat/lon/alt/heading` из Unity.
-- Миссии (`/api/mission`) будут вызывать `arm/takeoff/goto/rtl/land` на Unity стороне.
+```
+Assets/Scripts/
+├── Input/LocalGamepadInput.cs   ← геймпад
+├── Physics/  Flight/  Sim/  Camera/
+└── Bridge/                      ← только если useBackendUdp
+```
 
-### Примечание (важно)
-Это MVP: физика упрощённая. Мы делаем “приятную” управляемость, а не аэродинамическую модель.
-
+План: [ROADMAP.md](./ROADMAP.md)
