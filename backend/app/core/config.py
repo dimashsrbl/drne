@@ -89,6 +89,8 @@ class Settings(BaseSettings):
     betaflight_alt_liftoff_m: float = 0.06
     betaflight_alt_liftoff_ramp_us: int = 6
     betaflight_alt_baseline_samples: int = 6
+    # Баро: опрашивать MSP_ALTITUDE раз в N тиков RC (~25 Гц), чтобы не блокировать SET_RAW_RC.
+    betaflight_alt_poll_every_n: int = 3
     # Удержание ARM перед взлётом; Betaflight disarm, если MSP RC пропадает.
     betaflight_arm_hold_s: float = 3.0
     betaflight_arm_switch_us: int = 2000
