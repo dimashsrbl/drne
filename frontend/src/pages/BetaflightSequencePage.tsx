@@ -216,7 +216,7 @@ export function BetaflightSequencePage() {
         <div className="cardTitle">Слежение за целью (камера + дрон)</div>
         <div className="hint" style={{ marginBottom: 12 }}>
           Наведи объект в <b>центр</b> видео → <b>Захват + полёт</b> → дрон ARM, взлёт ~1 м, держит цель в кадре.
-          <b> STOP</b> — посадка и снятие захвата. Configurator закрыт, пропы сняты при первом тесте камеры.
+          <b> STOP</b> — немедленный DISARM (работает даже после ошибки). <b>LAND</b> — мягкая посадка по барометру.
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'minmax(280px, 1.2fr) minmax(240px, 0.8fr)', gap: 16 }}>
           <div
@@ -479,7 +479,7 @@ export function BetaflightSequencePage() {
             disabled={busy === 'stop'}
             onClick={() => void run('stop', stop)}
           >
-            STOP / DISARM
+            STOP / DISARM (всегда)
           </button>
           <button
             className="btn"

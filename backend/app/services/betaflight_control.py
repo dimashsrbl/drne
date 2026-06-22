@@ -216,6 +216,7 @@ class BetaflightRcRunner:
         self._emergency_land_steps: list[BetaflightSequenceStep] | None = None
         self._abort_remaining_steps = False
         self._run_mode: str = "idle"
+        self._last_cfg: BetaflightRunConfig | None = None
 
     def get_state(self) -> BetaflightRunnerState:
         with self._lock:
@@ -333,6 +334,7 @@ class BetaflightRcRunner:
             self._emergency_land_steps = None
             self._abort_remaining_steps = False
             self._run_mode = "sequence"
+            self._last_cfg = cfg
             self._state = BetaflightRunnerState(
                 status="running",
                 current_step=0,
@@ -375,6 +377,7 @@ class BetaflightRcRunner:
             self._stop_event.clear()
             self._emergency_land_steps = None
             self._abort_remaining_steps = False
+            self._last_cfg = cfg
             self._state = BetaflightRunnerState(
                 status="running",
                 current_step=1,
@@ -394,40 +397,79 @@ class BetaflightRcRunner:
         with self._lock:
             self._state.current_action = action
 
+    def _disarm_hold_s(self) -> float:
+        return max(0.5, float(settings.betaflight_disarm_hold_s))
+
+    def _stream_disarm_hold(
+        self,
+        ser: serial.Serial,
+        cfg: BetaflightRunConfig,
+        seconds: float | None = None,
+        *,
+        start_t: float | None = None,
+    ) -> None:
+        """Непрерывный DISARM по MSP — одного кадра недостаточно для Betaflight."""
+        hold_s = self._disarm_hold_s() if seconds is None else max(0.5, float(seconds))
+        idle = settings.betaflight_idle_throttle_us
+        channels = self._channels(cfg, throttle_us=idle, arm_us=1000)
+        interval = 1.0 / max(1.0, cfg.hz)
+        deadline = time.monotonic() + hold_s
+        while time.monotonic() < deadline:
+            self._send_channels(ser, channels)
+            if start_t is not None:
+                with self._lock:
+                    self._state.elapsed_s = time.monotonic() - start_t
+                    self._state.current_channels = list(channels)
+            time.sleep(interval)
+
+    def _force_disarm_standalone(
+        self,
+        port: str,
+        baud: int,
+        cfg: BetaflightRunConfig | None = None,
+    ) -> None:
+        """Открыть порт заново и гарантированно DISARM (после ошибки / когда поток уже завершился)."""
+        cfg_eff = cfg or BetaflightRunConfig(
+            port=port,
+            baud=baud,
+            hz=settings.betaflight_rc_hz,
+            channels=settings.betaflight_rc_channels,
+            arm_channel=settings.betaflight_arm_channel,
+            angle_channel=settings.betaflight_angle_channel,
+        )
+        try:
+            with betaflight_port_lock(timeout=5.0):
+                with serial.Serial(port, baudrate=baud, timeout=0.2) as ser:
+                    self._stream_disarm_hold(ser, cfg_eff)
+        except (PortBusyError, serial.SerialException, OSError):
+            pass
+
     def stop(self) -> None:
         with self._lock:
             self._emergency_land_steps = None
-            mode = self._run_mode
+            port = self._state.port or settings.betaflight_port
+            cfg = self._last_cfg
+            baud = cfg.baud if cfg is not None else settings.betaflight_baud
         self._stop_event.set()
-        if mode == "track":
-            thread = self._thread
-            if thread and thread.is_alive():
-                thread.join(timeout=120.0)
-            with self._lock:
-                if self._state.status == "running":
-                    self._state.status = "stopped"
-                    self._state.current_action = None
-                self._run_mode = "idle"
-            return
 
         ser = self._ser
-        if ser is not None:
+        if ser is not None and cfg is not None:
             try:
-                disarm_channels = self._channels(cfg=None, throttle_us=1000, arm_us=1000)
-                self._send_channels(ser, disarm_channels)
-                with self._lock:
-                    self._state.current_channels = disarm_channels
+                self._stream_disarm_hold(ser, cfg, min(1.0, self._disarm_hold_s()))
             except Exception:
                 pass
 
         thread = self._thread
         if thread and thread.is_alive():
-            thread.join(timeout=2.0)
+            thread.join(timeout=max(8.0, self._disarm_hold_s() + 5.0))
+
+        self._force_disarm_standalone(port, baud, cfg)
 
         with self._lock:
-            if self._state.status == "running":
+            if self._state.status in ("running", "error"):
                 self._state.status = "stopped"
                 self._state.current_action = None
+            self._run_mode = "idle"
 
     def _run(
         self,
@@ -476,7 +518,7 @@ class BetaflightRcRunner:
         except Exception as e:
             try:
                 if self._ser is not None:
-                    self._send_channels(self._ser, self._channels(cfg, throttle_us=1000, arm_us=1000))
+                    self._stream_disarm_hold(self._ser, cfg)
             except Exception:
                 pass
             with self._lock:
@@ -524,7 +566,7 @@ class BetaflightRcRunner:
         except Exception as e:
             try:
                 if self._ser is not None:
-                    self._send_channels(self._ser, self._channels(cfg, throttle_us=1000, arm_us=1000))
+                    self._stream_disarm_hold(self._ser, cfg)
             except Exception:
                 pass
             with self._lock:
@@ -1182,7 +1224,7 @@ class BetaflightRcRunner:
                 self._abort_remaining_steps = True
             self._execute_steps(ser, cfg, pending, start_t)
             return True
-        self._send_channels(ser, self._channels(cfg, throttle_us=1000, arm_us=1000))
+        self._stream_disarm_hold(ser, cfg, start_t=start_t)
         self._finish_stopped()
         return True
 

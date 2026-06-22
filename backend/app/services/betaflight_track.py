@@ -54,7 +54,7 @@ class BetaflightTrackMission:
             )
             self._runner._ramp_until_liftoff(ser, cfg, takeoff_step, start_t)
             if self._runner._stop_event.is_set():
-                self._land_disarm_unlock(ser, cfg, start_t, vt_url, land_step)
+                self._emergency_disarm_only(ser, cfg, start_t, vt_url)
                 return
 
             with self._runner._lock:
@@ -75,11 +75,14 @@ class BetaflightTrackMission:
                 )
 
             if self._runner._stop_event.is_set():
-                self._land_disarm_unlock(ser, cfg, start_t, vt_url, land_step)
+                self._emergency_disarm_only(ser, cfg, start_t, vt_url)
                 return
 
             self._follow_loop(vt_url, ser, cfg, start_t, target_alt, hover_step)
-            self._land_disarm_unlock(ser, cfg, start_t, vt_url, land_step)
+            if self._runner._stop_event.is_set():
+                self._emergency_disarm_only(ser, cfg, start_t, vt_url)
+            else:
+                self._land_disarm_unlock(ser, cfg, start_t, vt_url, land_step)
         finally:
             vision_unlock(vt_url)
 
@@ -176,6 +179,17 @@ class BetaflightTrackMission:
                     self._runner._state.current_alt_m = round(rel, 2)
             time.sleep(interval)
 
+    def _emergency_disarm_only(
+        self,
+        ser: serial.Serial,
+        cfg: BetaflightRunConfig,
+        start_t: float,
+        vt_url: str,
+    ) -> None:
+        self._runner._set_action("disarm")
+        self._runner._stream_disarm_hold(ser, cfg, start_t=start_t)
+        vision_unlock(vt_url)
+
     def _land_disarm_unlock(
         self,
         ser: serial.Serial,
@@ -187,11 +201,5 @@ class BetaflightTrackMission:
         self._runner._set_action("land")
         self._runner._stream_land_alt(ser, cfg, land_step, start_t)
         self._runner._set_action("disarm")
-        self._runner._stream_for(
-            ser,
-            cfg,
-            self._runner._channels(cfg, throttle_us=1000, arm_us=1000),
-            0.8,
-            start_t,
-        )
+        self._runner._stream_disarm_hold(ser, cfg, seconds=0.8, start_t=start_t)
         vision_unlock(vt_url)

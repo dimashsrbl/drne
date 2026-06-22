@@ -97,6 +97,8 @@ class Settings(BaseSettings):
     # Порядок первых 4 каналов MSP SET_RAW_RC — как ``map`` в Betaflight CLI (AETR1234 / AERT1234).
     betaflight_rc_map: str = "AETR"
     betaflight_emergency_land_s: float = 30.0
+    # STOP / ошибка: сколько секунд непрерывно слать DISARM по MSP (Betaflight disarm при пропаже RC).
+    betaflight_disarm_hold_s: float = 2.5
 
     # Vision-tracker + режим follow (localhost:8001 на Pi).
     vision_tracker_url: str = "http://127.0.0.1:8001"
