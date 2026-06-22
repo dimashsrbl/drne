@@ -4,7 +4,7 @@
 #   bash ~/drone/backend/tools/pi_git_setup.sh
 set -euo pipefail
 
-REPO_URL="${DRONE_GIT_URL:-https://github.com/dimashsrbl/drne.git}"
+REPO_URL="${DRONE_GIT_URL:-git@github.com:dimashsrbl/drne.git}"
 ROOT="${DRONE_ROOT:-$HOME/drone}"
 
 if [[ ! -d "$ROOT/backend" ]]; then
