@@ -101,6 +101,9 @@ class Settings(BaseSettings):
     betaflight_emergency_land_s: float = 30.0
     # STOP / ошибка: сколько секунд непрерывно слать DISARM по MSP (Betaflight disarm при пропаже RC).
     betaflight_disarm_hold_s: float = 2.5
+    # Нет опроса status/heartbeat от UI N сек → авто-DISARM (обрыв Wi‑Fi с ПК).
+    betaflight_client_watchdog_enabled: bool = True
+    betaflight_client_heartbeat_timeout_s: float = 4.0
 
     # Vision-tracker + режим follow (localhost:8001 на Pi).
     vision_tracker_url: str = "http://127.0.0.1:8001"

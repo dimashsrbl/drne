@@ -121,4 +121,7 @@ export const betaflightApi = {
   },
 
   status: () => apiFetch<BetaflightSequenceStatus>('/betaflight/sequence/status'),
+
+  heartbeat: () =>
+    apiFetch<{ ok: string }>('/betaflight/sequence/heartbeat', { method: 'POST' }),
 }

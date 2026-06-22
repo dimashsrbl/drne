@@ -90,6 +90,12 @@ def emergency_land(
     return _status_response(runner)
 
 
+@router.post("/sequence/heartbeat")
+def sequence_heartbeat(runner: BetaflightRcRunner = Depends(get_betaflight_runner)) -> dict[str, str]:
+    runner.touch_client_heartbeat()
+    return {"ok": "true"}
+
+
 @router.get("/sequence/status", response_model=BetaflightSequenceStatusResponse)
 def sequence_status(runner: BetaflightRcRunner = Depends(get_betaflight_runner)) -> BetaflightSequenceStatusResponse:
     return _status_response(runner)

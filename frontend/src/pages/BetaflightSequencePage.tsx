@@ -99,6 +99,19 @@ function clampNumber(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value))
 }
 
+async function stopWithRetry(maxAttempts = 6): Promise<BetaflightSequenceStatus> {
+  let lastErr: unknown
+  for (let i = 0; i < maxAttempts; i++) {
+    try {
+      return await betaflightApi.stopSequence()
+    } catch (e) {
+      lastErr = e
+      await new Promise((r) => window.setTimeout(r, 250))
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error('STOP не дошёл до Pi — проверь Wi‑Fi')
+}
+
 export function BetaflightSequencePage() {
   const [port, setPort] = useState('/dev/ttyACM0')
   const [baud, setBaud] = useState(115200)
@@ -108,15 +121,40 @@ export function BetaflightSequencePage() {
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [vision, setVision] = useState<BetaflightVisionCheckResponse | null>(null)
+  const [linkLost, setLinkLost] = useState(false)
 
   const json = useMemo(() => JSON.stringify({ port, baud, steps }, null, 2), [port, baud, steps])
 
   useEffect(() => {
-    if (status?.status !== 'running') return
-    const id = window.setInterval(() => {
-      void betaflightApi.status().then(setStatus).catch(() => {})
-    }, 500)
-    return () => window.clearInterval(id)
+    if (status?.status !== 'running') {
+      setLinkLost(false)
+      return
+    }
+    const statusId = window.setInterval(() => {
+      void betaflightApi
+        .status()
+        .then((s) => {
+          setStatus(s)
+          setLinkLost(false)
+        })
+        .catch(() => setLinkLost(true))
+    }, 400)
+    const hbId = window.setInterval(() => {
+      void betaflightApi.heartbeat().catch(() => setLinkLost(true))
+    }, 300)
+    return () => {
+      window.clearInterval(statusId)
+      window.clearInterval(hbId)
+    }
+  }, [status?.status])
+
+  useEffect(() => {
+    const onLeave = () => {
+      if (status?.status !== 'running') return
+      void fetch('/api/betaflight/sequence/stop', { method: 'POST', keepalive: true })
+    }
+    window.addEventListener('beforeunload', onLeave)
+    return () => window.removeEventListener('beforeunload', onLeave)
   }, [status?.status])
 
   useEffect(() => {
@@ -149,7 +187,7 @@ export function BetaflightSequencePage() {
   }
 
   const stop = async () => {
-    const res = await betaflightApi.stopSequence()
+    const res = await stopWithRetry()
     setStatus(res)
   }
 
@@ -200,7 +238,7 @@ export function BetaflightSequencePage() {
   }
 
   const stopTrack = async () => {
-    const res = await betaflightApi.stopSequence()
+    const res = await stopWithRetry()
     setStatus(res)
     await unlockTarget()
   }
@@ -298,8 +336,21 @@ export function BetaflightSequencePage() {
             Посадка по умолчанию: <code>land</code> 8 с, throttle 1080.
             Если уводит в сторону — подстрой <code>DRONE_BETAFLIGHT_STICK_CENTER_ROLL/PITCH_US</code> на Pi (±5–15).
             Площадка ровная, ANGLE ON. Configurator закрыт.
+            <br />
+            <b>Безопасность:</b> пока миссия идёт, Pi ждёт heartbeat от UI (~4 с). Нет связи → авто-DISARM.
+            Кнопка STOP шлёт команду 6 раз. При обрыве Wi‑Fi всё равно держи пульт/выключатель питания под рукой.
           </div>
         </div>
+
+        {linkLost && status?.status === 'running' ? (
+          <div className="alert" style={{ marginBottom: 12, borderColor: 'rgba(239,68,68,0.6)', background: 'rgba(239,68,68,0.12)' }}>
+            <div className="alertTitle" style={{ color: '#f87171' }}>Нет связи с Pi</div>
+            <div className="alertBody">
+              STOP с этого ПК может не дойти. Pi должен сам остановить моторы через ~4 с без heartbeat.
+              Если пропеллеры крутятся — выдерни питание или DISARM на пульте.
+            </div>
+          </div>
+        ) : null}
 
         {error ? (
           <div className="alert" style={{ marginBottom: 12 }}>
