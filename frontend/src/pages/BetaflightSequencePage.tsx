@@ -166,15 +166,6 @@ export function BetaflightSequencePage() {
   }, [status?.status])
 
   useEffect(() => {
-    const onLeave = () => {
-      if (status?.status !== 'running') return
-      void fetch('/api/betaflight/sequence/stop', { method: 'POST', keepalive: true })
-    }
-    window.addEventListener('beforeunload', onLeave)
-    return () => window.removeEventListener('beforeunload', onLeave)
-  }, [status?.status])
-
-  useEffect(() => {
     void betaflightApi.visionCheck().then(setVision).catch(() => {})
   }, [])
 
@@ -356,7 +347,7 @@ export function BetaflightSequencePage() {
             Если уводит в сторону — подстрой <code>DRONE_BETAFLIGHT_STICK_CENTER_ROLL/PITCH_US</code> на Pi (±5–15).
             Площадка ровная, ANGLE ON. Configurator закрыт.
             <br />
-            <b>Безопасность:</b> пока миссия идёт, Pi ждёт heartbeat от UI (~4 с). Нет связи → плавная посадка ~15 с, затем DISARM.
+            <b>Безопасность:</b> пока миссия идёт, Pi ждёт heartbeat от UI (~4 с). Нет связи → плавная посадка ~15 с (ARM держится), затем DISARM. Не жми STOP при обрыве — Pi сам приземлит.
             Кнопка STOP шлёт команду 6 раз. При обрыве Wi‑Fi всё равно держи пульт/выключатель питания под рукой.
           </div>
         </div>
