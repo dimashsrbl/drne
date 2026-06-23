@@ -502,15 +502,23 @@ class BetaflightRcRunner:
                     f"плавная посадка {land_s:.0f} с и DISARM. "
                     "Обрыв связи с наземной станцией."
                 )
+                self._request_link_loss_land(reason)
             else:
                 reason = (
                     f"Watchdog: нет heartbeat от UI {timeout_s:.0f} с — авто-DISARM. "
                     "Обрыв связи с наземной станцией."
                 )
-            self.stop(
-                reason=reason,
-                soft_land=settings.betaflight_link_loss_soft_land_enabled,
-            )
+                self.stop(reason=reason, soft_land=False)
+
+    def _request_link_loss_land(self, reason: str) -> None:
+        """Сигнал миссии: плавная посадка в её потоке. Без join/force_disarm из watchdog."""
+        with self._lock:
+            if self._soft_land_on_stop or self._soft_land_in_progress:
+                return
+            self._soft_land_on_stop = True
+            if self._state.status == "running":
+                self._state.error = reason
+        self._stop_event.set()
 
     def _stream_disarm_hold(
         self,
@@ -695,11 +703,18 @@ class BetaflightRcRunner:
 
             join_timeout = max(8.0, self._disarm_hold_s() + 5.0)
             if want_soft_land:
-                join_timeout = max(join_timeout, land_s + 15.0)
-            if thread and thread.is_alive():
+                join_timeout = max(join_timeout, land_s + 20.0)
+            if want_soft_land:
+                deadline = time.monotonic() + land_s + 25.0
+                while thread and thread.is_alive() and time.monotonic() < deadline:
+                    thread.join(timeout=0.5)
+            elif thread and thread.is_alive():
                 thread.join(timeout=join_timeout)
 
-            self._force_disarm_standalone(port, baud, cfg)
+            # Не дёргать DISARM пока миссия ещё ведёт плавную посадку (гонка с join timeout).
+            thread_alive = thread is not None and thread.is_alive()
+            if not want_soft_land or not thread_alive:
+                self._force_disarm_standalone(port, baud, cfg)
 
             with self._lock:
                 if self._state.status in ("running", "error"):
@@ -896,7 +911,7 @@ class BetaflightRcRunner:
     def _send_channels(self, ser: serial.Serial, channels: list[int]) -> None:
         with self._lock:
             self._state.current_channels = list(channels)
-        if self._rc_streamer is not None:
+        if self._rc_streamer is not None and not self._soft_land_in_progress:
             self._rc_streamer.set_channels(channels)
             return
         payload = struct.pack("<" + "H" * len(channels), *channels)
@@ -1527,6 +1542,12 @@ class BetaflightRcRunner:
         start_t: float,
     ) -> bool:
         """True — выйти из цикла: лимит миссии, STOP или экстренная посадка."""
+        if self._stop_event.is_set():
+            with self._lock:
+                pending_soft = self._soft_land_on_stop and not self._soft_land_in_progress
+            if pending_soft:
+                self._execute_soft_land_and_stop(ser, cfg, start_t)
+                return True
         if self._mission_time_exceeded():
             land_s = self._soft_land_duration_s()
             err = (
