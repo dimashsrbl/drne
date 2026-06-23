@@ -42,7 +42,7 @@ class BetaflightSequenceStartRequest(BaseModel):
     channels: int | None = Field(default=None, ge=4, le=18)
     arm_channel: int | None = Field(default=None, ge=1, le=18)
     angle_channel: int | None = Field(default=None, ge=1, le=18)
-    # Лимит всей миссии (с). None → из settings (25). 0 → без лимита.
+    # Лимит всей миссии (с). None → из settings (40). 0 → без лимита.
     max_mission_s: float | None = Field(default=None, ge=0.0, le=600.0)
 
 

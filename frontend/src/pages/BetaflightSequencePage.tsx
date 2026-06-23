@@ -123,7 +123,7 @@ export function BetaflightSequencePage() {
   const [vision, setVision] = useState<BetaflightVisionCheckResponse | null>(null)
   const [linkLost, setLinkLost] = useState(false)
   const [missionLimitEnabled, setMissionLimitEnabled] = useState(true)
-  const [missionMaxS, setMissionMaxS] = useState(25)
+  const [missionMaxS, setMissionMaxS] = useState(40)
 
   const json = useMemo(
     () =>

@@ -613,10 +613,45 @@ class BetaflightRcRunner:
         except (PortBusyError, serial.SerialException, OSError):
             pass
 
+    def _stop_rc_streamer(self) -> None:
+        streamer = self._rc_streamer
+        if streamer is not None:
+            streamer.stop()
+            self._rc_streamer = None
+
+    def _soft_land_duration_s(self) -> float:
+        return max(2.0, float(settings.betaflight_link_loss_land_s))
+
+    def _execute_soft_land_and_stop(
+        self,
+        ser: serial.Serial,
+        cfg: BetaflightRunConfig,
+        start_t: float,
+        *,
+        reason: str | None = None,
+    ) -> None:
+        """Плавная посадка в потоке миссии (пока serial открыт), затем DISARM."""
+        with self._lock:
+            self._soft_land_in_progress = True
+        try:
+            if reason:
+                with self._lock:
+                    if self._state.status == "running":
+                        self._state.error = reason
+            self._stop_rc_streamer()
+            land_s = self._soft_land_duration_s()
+            self._stream_throttle_ramp_down(ser, cfg, land_s, start_t=start_t)
+            self._stream_disarm_hold(ser, cfg, start_t=start_t)
+            self._stop_event.set()
+            self._finish_stopped()
+        finally:
+            with self._lock:
+                self._soft_land_in_progress = False
+
     def stop(self, *, reason: str | None = None, soft_land: bool = False) -> None:
         self._stop_client_watchdog()
         use_soft_land = soft_land and settings.betaflight_link_loss_soft_land_enabled
-        land_s = max(2.0, float(settings.betaflight_link_loss_land_s))
+        land_s = self._soft_land_duration_s()
         with self._lock:
             self._emergency_land_steps = None
             port = self._state.port or settings.betaflight_port
@@ -626,33 +661,18 @@ class BetaflightRcRunner:
             if reason and self._state.status == "running":
                 self._state.error = reason
         self._stop_event.set()
-        # Дать потоку миссии увидеть stop_event и выйти без DISARM.
-        time.sleep(0.2)
 
-        ser = self._ser
-        if use_soft_land and ser is not None and cfg is not None:
-            with self._lock:
-                self._soft_land_in_progress = True
-            streamer = self._rc_streamer
-            if streamer is not None:
-                streamer.stop()
-                self._rc_streamer = None
-            try:
-                self._stream_throttle_ramp_down(ser, cfg, land_s)
-            except Exception:
-                pass
-            finally:
-                with self._lock:
-                    self._soft_land_in_progress = False
-        elif ser is not None and cfg is not None:
-            try:
-                self._stream_disarm_hold(ser, cfg, min(1.0, self._disarm_hold_s()))
-            except Exception:
-                pass
+        if not use_soft_land:
+            ser = self._ser
+            if ser is not None and cfg is not None:
+                try:
+                    self._stream_disarm_hold(ser, cfg, min(1.0, self._disarm_hold_s()))
+                except Exception:
+                    pass
 
         join_timeout = max(8.0, self._disarm_hold_s() + 5.0)
         if use_soft_land:
-            join_timeout = max(join_timeout, land_s + 8.0)
+            join_timeout = max(join_timeout, land_s + 12.0)
         thread = self._thread
         if thread and thread.is_alive():
             thread.join(timeout=join_timeout)
@@ -719,7 +739,9 @@ class BetaflightRcRunner:
                 self._state.elapsed_s = time.monotonic() - start_t
         except Exception as e:
             try:
-                if self._ser is not None:
+                with self._lock:
+                    skip_disarm = self._soft_land_on_stop
+                if self._ser is not None and not skip_disarm:
                     self._stream_disarm_hold(self._ser, cfg)
             except Exception:
                 pass
@@ -771,7 +793,9 @@ class BetaflightRcRunner:
                 self._state.elapsed_s = time.monotonic() - start_t
         except Exception as e:
             try:
-                if self._ser is not None:
+                with self._lock:
+                    skip_disarm = self._soft_land_on_stop
+                if self._ser is not None and not skip_disarm:
                     self._stream_disarm_hold(self._ser, cfg)
             except Exception:
                 pass
@@ -1482,21 +1506,12 @@ class BetaflightRcRunner:
     ) -> bool:
         """True — выйти из цикла: лимит миссии, STOP или экстренная посадка."""
         if self._mission_time_exceeded():
-            land_s = max(2.0, float(settings.betaflight_link_loss_land_s))
-            if settings.betaflight_link_loss_soft_land_enabled:
-                self._stream_throttle_ramp_down(ser, cfg, land_s, start_t=start_t)
-                err = (
-                    f"Лимит миссии {self._mission_max_s:.0f} с — "
-                    f"плавная посадка {land_s:.0f} с и DISARM."
-                )
-            else:
-                self._stream_disarm_hold(ser, cfg, start_t=start_t)
-                err = f"Лимит миссии {self._mission_max_s:.0f} с — авто-DISARM."
-            with self._lock:
-                if self._state.status == "running":
-                    self._state.error = err
-            self._stop_event.set()
-            self._finish_stopped()
+            land_s = self._soft_land_duration_s()
+            err = (
+                f"Лимит миссии {self._mission_max_s:.0f} с — "
+                f"плавная посадка {land_s:.0f} с и DISARM."
+            )
+            self._execute_soft_land_and_stop(ser, cfg, start_t, reason=err)
             return True
         return self._try_interrupt(ser, cfg, start_t)
 
@@ -1520,8 +1535,7 @@ class BetaflightRcRunner:
         with self._lock:
             soft_land = self._soft_land_on_stop
         if soft_land:
-            # Плавная посадка выполняется в stop(); здесь только выходим из цикла.
-            self._finish_stopped()
+            self._execute_soft_land_and_stop(ser, cfg, start_t)
             return True
         self._stream_disarm_hold(ser, cfg, start_t=start_t)
         self._finish_stopped()

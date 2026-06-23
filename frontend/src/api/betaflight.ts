@@ -29,7 +29,7 @@ export type BetaflightSequenceRequest = {
   steps: BetaflightSequenceStep[]
   port?: string | null
   baud?: number | null
-  /** Лимит всей миссии (с). undefined → backend default (25). 0 → без лимита. */
+  /** Лимит всей миссии (с). undefined → backend default (40). 0 → без лимита. */
   max_mission_s?: number | null
 }
 
