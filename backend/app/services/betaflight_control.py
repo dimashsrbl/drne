@@ -221,13 +221,13 @@ class BetaflightRcRunner:
         self._last_client_seen: float = 0.0
         self._watchdog_stop = threading.Event()
         self._watchdog_thread: threading.Thread | None = None
+        self._watchdog_fired = False
 
     def touch_client_heartbeat(self) -> None:
-        """Любой запрос status/heartbeat от UI — сброс таймера watchdog на Pi."""
+        """Запрос от UI (status/heartbeat) — сброс таймера watchdog. Не вызывать из фоновых потоков Pi."""
         self._last_client_seen = time.monotonic()
 
     def get_state(self) -> BetaflightRunnerState:
-        self.touch_client_heartbeat()
         with self._lock:
             return BetaflightRunnerState(**self._state.__dict__)
 
@@ -417,6 +417,7 @@ class BetaflightRcRunner:
 
     def _start_client_watchdog(self) -> None:
         self._watchdog_stop.clear()
+        self._watchdog_fired = False
         self.touch_client_heartbeat()
         if self._watchdog_thread and self._watchdog_thread.is_alive():
             return
@@ -431,7 +432,7 @@ class BetaflightRcRunner:
         self._watchdog_stop.set()
 
     def _client_watchdog_loop(self) -> None:
-        """Авто-DISARM если UI перестал слать status (обрыв сети ПК↔Pi)."""
+        """Авто-DISARM если UI перестал слать heartbeat (обрыв Wi‑Fi ПК↔Pi)."""
         interval = 0.4
         timeout_s = max(1.5, float(settings.betaflight_client_heartbeat_timeout_s))
         while not self._watchdog_stop.wait(interval):
@@ -443,20 +444,14 @@ class BetaflightRcRunner:
                 last = self._last_client_seen
             if last <= 0 or time.monotonic() - last <= timeout_s:
                 continue
-            self._stop_event.set()
-            ser = self._ser
-            cfg = self._last_cfg
-            if ser is not None and cfg is not None:
-                try:
-                    self._stream_disarm_hold(ser, cfg, min(2.0, self._disarm_hold_s()))
-                except Exception:
-                    pass
-            with self._lock:
-                if self._state.status == "running":
-                    self._state.error = (
-                        f"Watchdog: нет связи с UI {timeout_s:.0f} с — авто-DISARM. "
-                        "Проверь Wi‑Fi или запусти миссию снова."
-                    )
+            if self._watchdog_fired:
+                continue
+            self._watchdog_fired = True
+            reason = (
+                f"Watchdog: нет heartbeat от UI {timeout_s:.0f} с — авто-DISARM. "
+                "Обрыв связи с наземной станцией."
+            )
+            self.stop(reason=reason)
 
     def _stream_disarm_hold(
         self,
@@ -502,12 +497,15 @@ class BetaflightRcRunner:
         except (PortBusyError, serial.SerialException, OSError):
             pass
 
-    def stop(self) -> None:
+    def stop(self, *, reason: str | None = None) -> None:
+        self._stop_client_watchdog()
         with self._lock:
             self._emergency_land_steps = None
             port = self._state.port or settings.betaflight_port
             cfg = self._last_cfg
             baud = cfg.baud if cfg is not None else settings.betaflight_baud
+            if reason and self._state.status == "running":
+                self._state.error = reason
         self._stop_event.set()
 
         ser = self._ser

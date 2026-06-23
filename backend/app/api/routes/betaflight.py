@@ -98,6 +98,8 @@ def sequence_heartbeat(runner: BetaflightRcRunner = Depends(get_betaflight_runne
 
 @router.get("/sequence/status", response_model=BetaflightSequenceStatusResponse)
 def sequence_status(runner: BetaflightRcRunner = Depends(get_betaflight_runner)) -> BetaflightSequenceStatusResponse:
+    if runner.get_state().status == "running":
+        runner.touch_client_heartbeat()
     return _status_response(runner)
 
 
