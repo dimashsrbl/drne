@@ -122,8 +122,25 @@ export function BetaflightSequencePage() {
   const [error, setError] = useState<string | null>(null)
   const [vision, setVision] = useState<BetaflightVisionCheckResponse | null>(null)
   const [linkLost, setLinkLost] = useState(false)
+  const [missionLimitEnabled, setMissionLimitEnabled] = useState(true)
+  const [missionMaxS, setMissionMaxS] = useState(25)
 
-  const json = useMemo(() => JSON.stringify({ port, baud, steps }, null, 2), [port, baud, steps])
+  const json = useMemo(
+    () =>
+      JSON.stringify(
+        {
+          port,
+          baud,
+          steps,
+          max_mission_s: missionLimitEnabled ? missionMaxS : 0,
+        },
+        null,
+        2,
+      ),
+    [port, baud, steps, missionLimitEnabled, missionMaxS],
+  )
+
+  const missionMaxPayload = missionLimitEnabled ? missionMaxS : 0
 
   useEffect(() => {
     if (status?.status !== 'running') {
@@ -182,7 +199,7 @@ export function BetaflightSequencePage() {
   }
 
   const start = async () => {
-    const res = await betaflightApi.startSequence({ port, baud, steps })
+    const res = await betaflightApi.startSequence({ port, baud, steps, max_mission_s: missionMaxPayload })
     setStatus(res)
   }
 
@@ -218,6 +235,7 @@ export function BetaflightSequencePage() {
       target_alt_m: 1.0,
       throttle_us: 1410,
       wait_lock_s: 90,
+      max_mission_s: missionMaxPayload,
     })
     setStatus(res)
   }
@@ -233,6 +251,7 @@ export function BetaflightSequencePage() {
       target_alt_m: 1.0,
       throttle_us: 1410,
       wait_lock_s: 90,
+      max_mission_s: missionMaxPayload,
     })
     setStatus(res)
   }
@@ -337,7 +356,7 @@ export function BetaflightSequencePage() {
             Если уводит в сторону — подстрой <code>DRONE_BETAFLIGHT_STICK_CENTER_ROLL/PITCH_US</code> на Pi (±5–15).
             Площадка ровная, ANGLE ON. Configurator закрыт.
             <br />
-            <b>Безопасность:</b> пока миссия идёт, Pi ждёт heartbeat от UI (~4 с). Нет связи → авто-DISARM.
+            <b>Безопасность:</b> пока миссия идёт, Pi ждёт heartbeat от UI (~4 с). Нет связи → плавная посадка ~15 с, затем DISARM.
             Кнопка STOP шлёт команду 6 раз. При обрыве Wi‑Fi всё равно держи пульт/выключатель питания под рукой.
           </div>
         </div>
@@ -346,7 +365,7 @@ export function BetaflightSequencePage() {
           <div className="alert" style={{ marginBottom: 12, borderColor: 'rgba(239,68,68,0.6)', background: 'rgba(239,68,68,0.12)' }}>
             <div className="alertTitle" style={{ color: '#f87171' }}>Нет связи с Pi</div>
             <div className="alertBody">
-              STOP с этого ПК может не дойти. Pi должен сам остановить моторы через ~4 с без heartbeat.
+              STOP с этого ПК может не дойти. Pi начнёт плавно снижать газ (~15 с) и затем DISARM.
               Если пропеллеры крутятся — выдерни питание или DISARM на пульте.
             </div>
           </div>
@@ -367,6 +386,25 @@ export function BetaflightSequencePage() {
           <label className="field" style={{ maxWidth: 140 }}>
             <span>Baud</span>
             <input type="number" min={9600} max={1000000} value={baud} onChange={(e) => setBaud(Number(e.target.value))} />
+          </label>
+          <label className="field" style={{ display: 'flex', alignItems: 'center', gap: 8, maxWidth: 200 }}>
+            <input
+              type="checkbox"
+              checked={missionLimitEnabled}
+              onChange={(e) => setMissionLimitEnabled(e.target.checked)}
+            />
+            <span>Лимит миссии</span>
+          </label>
+          <label className="field" style={{ maxWidth: 100 }}>
+            <span>сек</span>
+            <input
+              type="number"
+              min={1}
+              max={600}
+              disabled={!missionLimitEnabled}
+              value={missionMaxS}
+              onChange={(e) => setMissionMaxS(Number(e.target.value))}
+            />
           </label>
           <button className="btn" disabled={!!busy} onClick={() => void run('check', checkMsp)}>
             Check MSP
@@ -563,6 +601,16 @@ export function BetaflightSequencePage() {
             <div className="v">{status.current_action ?? '-'}</div>
             <div className="k">elapsed</div>
             <div className="v">{status.elapsed_s.toFixed(1)} s</div>
+            {status.mission_max_s != null ? (
+              <>
+                <div className="k">mission limit</div>
+                <div className="v">
+                  {status.mission_remaining_s != null
+                    ? `${status.mission_remaining_s.toFixed(1)} / ${status.mission_max_s.toFixed(0)} s`
+                    : `${status.mission_max_s.toFixed(0)} s`}
+                </div>
+              </>
+            ) : null}
             <div className="k">alt (baro)</div>
             <div className="v">
               {status.current_alt_m != null ? `${status.current_alt_m.toFixed(2)} m` : '—'}

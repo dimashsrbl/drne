@@ -36,7 +36,7 @@ class BetaflightTrackMission:
 
         try:
             self._wait_target_lock(vt_url, req, start_t, ser, cfg)
-            if self._runner._stop_event.is_set():
+            if self._runner._stop_event.is_set() or self._runner._state.status != "running":
                 return
 
             self._runner._set_action("arm")
@@ -53,8 +53,9 @@ class BetaflightTrackMission:
                 settle_s=req.settle_s,
             )
             self._runner._ramp_until_liftoff(ser, cfg, takeoff_step, start_t)
-            if self._runner._stop_event.is_set():
-                self._emergency_disarm_only(ser, cfg, start_t, vt_url)
+            if self._runner._try_abort(ser, cfg, start_t):
+                if not self._runner._soft_land_on_stop:
+                    self._emergency_disarm_only(ser, cfg, start_t, vt_url)
                 return
 
             with self._runner._lock:
@@ -63,7 +64,7 @@ class BetaflightTrackMission:
                 ser, cfg, takeoff_step, start_t, target_rel_m=target_alt, done_when_reached=True
             )
             settle_s = takeoff_step.settle_s if takeoff_step.settle_s is not None else settings.betaflight_alt_takeoff_settle_s
-            if settle_s > 0 and not self._runner._stop_event.is_set():
+            if settle_s > 0 and self._runner._state.status == "running":
                 settle_step = BetaflightSequenceStep(
                     action="hold_alt",
                     seconds=settle_s,
@@ -74,13 +75,15 @@ class BetaflightTrackMission:
                     ser, cfg, settle_step, start_t, target_rel_m=target_alt, done_when_reached=False, hold=True
                 )
 
-            if self._runner._stop_event.is_set():
-                self._emergency_disarm_only(ser, cfg, start_t, vt_url)
+            if self._runner._try_abort(ser, cfg, start_t):
+                if not self._runner._soft_land_on_stop:
+                    self._emergency_disarm_only(ser, cfg, start_t, vt_url)
                 return
 
             self._follow_loop(vt_url, ser, cfg, start_t, target_alt, hover_step)
-            if self._runner._stop_event.is_set():
-                self._emergency_disarm_only(ser, cfg, start_t, vt_url)
+            if self._runner._stop_event.is_set() or self._runner._state.status != "running":
+                if not self._runner._soft_land_on_stop:
+                    self._emergency_disarm_only(ser, cfg, start_t, vt_url)
             else:
                 self._land_disarm_unlock(ser, cfg, start_t, vt_url, land_step)
         finally:
@@ -102,7 +105,7 @@ class BetaflightTrackMission:
         deadline = time.monotonic() + max(5.0, req.wait_lock_s)
         disarm = self._runner._channels(cfg, throttle_us=1000, arm_us=1000)
         while time.monotonic() < deadline:
-            if self._runner._stop_event.is_set():
+            if self._runner._try_abort(ser, cfg, start_t):
                 return
             self._runner._send_channels(ser, disarm)
             snap = fetch_target(vt_url)
@@ -140,7 +143,9 @@ class BetaflightTrackMission:
         cy_db = settings.betaflight_track_cy_deadband
         lost_since: float | None = None
 
-        while not self._runner._stop_event.is_set():
+        while self._runner._state.status == "running":
+            if self._runner._try_abort(ser, cfg, start_t):
+                break
             snap = fetch_target(vt_url)
             roll = settings.betaflight_stick_center_roll_us
             pitch = settings.betaflight_stick_center_pitch_us

@@ -42,6 +42,8 @@ class BetaflightSequenceStartRequest(BaseModel):
     channels: int | None = Field(default=None, ge=4, le=18)
     arm_channel: int | None = Field(default=None, ge=1, le=18)
     angle_channel: int | None = Field(default=None, ge=1, le=18)
+    # Лимит всей миссии (с). None → из settings (25). 0 → без лимита.
+    max_mission_s: float | None = Field(default=None, ge=0.0, le=600.0)
 
 
 class BetaflightEmergencyLandRequest(BaseModel):
@@ -62,6 +64,7 @@ class BetaflightTrackStartRequest(BaseModel):
     settle_s: float | None = Field(default=2.0, ge=0.0, le=30.0)
     throttle_us: int | None = Field(default=None, ge=1000, le=2000)
     auto_lock: bool = Field(default=False, description="POST /lock перед ожиданием цели")
+    max_mission_s: float | None = Field(default=None, ge=0.0, le=600.0)
 
 
 class BetaflightCheckResponse(BaseModel):
@@ -84,3 +87,5 @@ class BetaflightSequenceStatusResponse(BaseModel):
     current_channels: list[int] | None = None
     current_alt_m: float | None = Field(default=None, description="Текущая относительная высота по барометру, м")
     target_alt_m: float | None = Field(default=None, description="Целевая высота шага, м")
+    mission_max_s: float | None = Field(default=None, description="Лимит миссии, с")
+    mission_remaining_s: float | None = Field(default=None, description="Осталось до лимита, с")

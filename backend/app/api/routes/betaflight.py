@@ -30,6 +30,8 @@ def _status_response(runner: BetaflightRcRunner) -> BetaflightSequenceStatusResp
         current_channels=state.current_channels,
         current_alt_m=state.current_alt_m,
         target_alt_m=state.target_alt_m,
+        mission_max_s=state.mission_max_s,
+        mission_remaining_s=state.mission_remaining_s,
     )
 
 

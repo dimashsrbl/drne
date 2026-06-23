@@ -29,6 +29,8 @@ export type BetaflightSequenceRequest = {
   steps: BetaflightSequenceStep[]
   port?: string | null
   baud?: number | null
+  /** Лимит всей миссии (с). undefined → backend default (25). 0 → без лимита. */
+  max_mission_s?: number | null
 }
 
 export type BetaflightEmergencyLandRequest = {
@@ -46,6 +48,7 @@ export type BetaflightTrackStartRequest = {
   wait_lock_s?: number
   auto_lock?: boolean
   throttle_us?: number | null
+  max_mission_s?: number | null
 }
 
 export type BetaflightVisionCheckResponse = {
@@ -79,6 +82,8 @@ export type BetaflightSequenceStatus = {
   current_channels?: number[] | null
   current_alt_m?: number | null
   target_alt_m?: number | null
+  mission_max_s?: number | null
+  mission_remaining_s?: number | null
 }
 
 export const betaflightApi = {

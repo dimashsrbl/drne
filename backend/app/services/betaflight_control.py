@@ -33,6 +33,8 @@ class BetaflightRunnerState:
     current_channels: list[int] | None = None
     current_alt_m: float | None = None
     target_alt_m: float | None = None
+    mission_max_s: float | None = None
+    mission_remaining_s: float | None = None
 
 
 @dataclass(frozen=True)
@@ -222,6 +224,10 @@ class BetaflightRcRunner:
         self._watchdog_stop = threading.Event()
         self._watchdog_thread: threading.Thread | None = None
         self._watchdog_fired = False
+        self._soft_land_on_stop = False
+        self._soft_land_in_progress = False
+        self._mission_deadline_monotonic: float | None = None
+        self._mission_max_s: float | None = None
 
     def touch_client_heartbeat(self) -> None:
         """Запрос от UI (status/heartbeat) — сброс таймера watchdog. Не вызывать из фоновых потоков Pi."""
@@ -229,7 +235,45 @@ class BetaflightRcRunner:
 
     def get_state(self) -> BetaflightRunnerState:
         with self._lock:
-            return BetaflightRunnerState(**self._state.__dict__)
+            state = BetaflightRunnerState(**self._state.__dict__)
+        if self._mission_deadline_monotonic is not None and self._mission_max_s is not None:
+            state.mission_max_s = self._mission_max_s
+            state.mission_remaining_s = round(
+                max(0.0, self._mission_deadline_monotonic - time.monotonic()),
+                1,
+            )
+        return state
+
+    def _configure_mission_limit(self, request_max_s: float | None) -> None:
+        if request_max_s is not None:
+            cap = None if request_max_s <= 0 else float(request_max_s)
+        else:
+            cap = settings.betaflight_mission_max_s
+        if cap is None or cap <= 0:
+            self._mission_deadline_monotonic = None
+            self._mission_max_s = None
+            with self._lock:
+                self._state.mission_max_s = None
+                self._state.mission_remaining_s = None
+            return
+        cap = max(1.0, cap)
+        self._mission_max_s = cap
+        self._mission_deadline_monotonic = time.monotonic() + cap
+        with self._lock:
+            self._state.mission_max_s = cap
+            self._state.mission_remaining_s = cap
+
+    def _clear_mission_limit(self) -> None:
+        self._mission_deadline_monotonic = None
+        self._mission_max_s = None
+        with self._lock:
+            self._state.mission_max_s = None
+            self._state.mission_remaining_s = None
+
+    def _mission_time_exceeded(self) -> bool:
+        if self._mission_deadline_monotonic is None:
+            return False
+        return time.monotonic() >= self._mission_deadline_monotonic
 
     def check(self, port: str | None = None, baud: int | None = None) -> dict[str, object]:
         cfg_port = port or settings.betaflight_port
@@ -331,7 +375,7 @@ class BetaflightRcRunner:
                 self._stop_event.set()
                 return
 
-        self._start_sequence(land_steps, cfg, skip_disarm_preamble=True)
+        self._start_sequence(land_steps, cfg, skip_disarm_preamble=True, max_mission_s=0)
 
     def _start_sequence(
         self,
@@ -339,6 +383,7 @@ class BetaflightRcRunner:
         cfg: BetaflightRunConfig,
         *,
         skip_disarm_preamble: bool = False,
+        max_mission_s: float | None = None,
     ) -> None:
         with self._lock:
             if self._state.status == "running":
@@ -348,6 +393,7 @@ class BetaflightRcRunner:
             self._abort_remaining_steps = False
             self._run_mode = "sequence"
             self._last_cfg = cfg
+            self._configure_mission_limit(max_mission_s)
             self._state = BetaflightRunnerState(
                 status="running",
                 current_step=0,
@@ -373,7 +419,7 @@ class BetaflightRcRunner:
             arm_channel=req.arm_channel or settings.betaflight_arm_channel,
             angle_channel=req.angle_channel or settings.betaflight_angle_channel,
         )
-        self._start_sequence(list(req.steps), cfg, skip_disarm_preamble=False)
+        self._start_sequence(list(req.steps), cfg, skip_disarm_preamble=False, max_mission_s=req.max_mission_s)
 
     def start_track(self, req: BetaflightTrackStartRequest) -> None:
         cfg = BetaflightRunConfig(
@@ -392,6 +438,7 @@ class BetaflightRcRunner:
             self._emergency_land_steps = None
             self._abort_remaining_steps = False
             self._last_cfg = cfg
+            self._configure_mission_limit(req.max_mission_s)
             self._state = BetaflightRunnerState(
                 status="running",
                 current_step=1,
@@ -432,7 +479,7 @@ class BetaflightRcRunner:
         self._watchdog_stop.set()
 
     def _client_watchdog_loop(self) -> None:
-        """Авто-DISARM если UI перестал слать heartbeat (обрыв Wi‑Fi ПК↔Pi)."""
+        """При обрыве связи UI↔Pi — плавная посадка (или DISARM) если heartbeat пропал."""
         interval = 0.4
         timeout_s = max(1.5, float(settings.betaflight_client_heartbeat_timeout_s))
         while not self._watchdog_stop.wait(interval):
@@ -447,11 +494,22 @@ class BetaflightRcRunner:
             if self._watchdog_fired:
                 continue
             self._watchdog_fired = True
-            reason = (
-                f"Watchdog: нет heartbeat от UI {timeout_s:.0f} с — авто-DISARM. "
-                "Обрыв связи с наземной станцией."
+            land_s = max(2.0, float(settings.betaflight_link_loss_land_s))
+            if settings.betaflight_link_loss_soft_land_enabled:
+                reason = (
+                    f"Watchdog: нет heartbeat от UI {timeout_s:.0f} с — "
+                    f"плавная посадка {land_s:.0f} с и DISARM. "
+                    "Обрыв связи с наземной станцией."
+                )
+            else:
+                reason = (
+                    f"Watchdog: нет heartbeat от UI {timeout_s:.0f} с — авто-DISARM. "
+                    "Обрыв связи с наземной станцией."
+                )
+            self.stop(
+                reason=reason,
+                soft_land=settings.betaflight_link_loss_soft_land_enabled,
             )
-            self.stop(reason=reason)
 
     def _stream_disarm_hold(
         self,
@@ -473,6 +531,64 @@ class BetaflightRcRunner:
                 with self._lock:
                     self._state.elapsed_s = time.monotonic() - start_t
                     self._state.current_channels = list(channels)
+            time.sleep(interval)
+
+    def _current_throttle_us(self) -> int:
+        with self._lock:
+            ch = self._state.current_channels
+        if not ch:
+            return settings.betaflight_alt_hover_us
+        rc_map = (settings.betaflight_rc_map or "AETR").upper()[:4]
+        if "T" in rc_map:
+            idx = rc_map.index("T")
+            if idx < len(ch):
+                return max(settings.betaflight_idle_throttle_us, int(ch[idx]))
+        return settings.betaflight_alt_hover_us
+
+    def _stream_throttle_ramp_down(
+        self,
+        ser: serial.Serial,
+        cfg: BetaflightRunConfig,
+        duration_s: float,
+        *,
+        start_t: float | None = None,
+    ) -> None:
+        """Плавно снижает газ до idle (ease-out), держит ARM+ANGLE — для обрыва связи."""
+        duration_s = max(2.0, float(duration_s))
+        idle = settings.betaflight_idle_throttle_us
+        start_throttle = self._current_throttle_us()
+        start_throttle = max(idle, start_throttle)
+        interval = 1.0 / max(1.0, cfg.hz)
+        deadline = time.monotonic() + duration_s
+        self._set_action("link_loss_land")
+        while time.monotonic() < deadline:
+            elapsed = duration_s - (deadline - time.monotonic())
+            progress = min(1.0, max(0.0, elapsed / duration_s))
+            eased = 1.0 - (1.0 - progress) * (1.0 - progress)
+            throttle = int(start_throttle - (start_throttle - idle) * eased)
+            throttle = max(idle, throttle)
+            channels = self._channels(
+                cfg,
+                throttle_us=throttle,
+                arm_us=self._arm_switch_us(),
+            )
+            self._send_channels(ser, channels)
+            if start_t is not None:
+                with self._lock:
+                    self._state.elapsed_s = time.monotonic() - start_t
+                    self._state.current_channels = list(channels)
+            time.sleep(interval)
+        hold_channels = self._channels(
+            cfg,
+            throttle_us=idle,
+            arm_us=self._arm_switch_us(),
+        )
+        hold_deadline = time.monotonic() + 0.5
+        while time.monotonic() < hold_deadline:
+            self._send_channels(ser, hold_channels)
+            if start_t is not None:
+                with self._lock:
+                    self._state.elapsed_s = time.monotonic() - start_t
             time.sleep(interval)
 
     def _force_disarm_standalone(
@@ -497,27 +613,49 @@ class BetaflightRcRunner:
         except (PortBusyError, serial.SerialException, OSError):
             pass
 
-    def stop(self, *, reason: str | None = None) -> None:
+    def stop(self, *, reason: str | None = None, soft_land: bool = False) -> None:
         self._stop_client_watchdog()
+        use_soft_land = soft_land and settings.betaflight_link_loss_soft_land_enabled
+        land_s = max(2.0, float(settings.betaflight_link_loss_land_s))
         with self._lock:
             self._emergency_land_steps = None
             port = self._state.port or settings.betaflight_port
             cfg = self._last_cfg
             baud = cfg.baud if cfg is not None else settings.betaflight_baud
+            self._soft_land_on_stop = use_soft_land
             if reason and self._state.status == "running":
                 self._state.error = reason
         self._stop_event.set()
+        # Дать потоку миссии увидеть stop_event и выйти без DISARM.
+        time.sleep(0.2)
 
         ser = self._ser
-        if ser is not None and cfg is not None:
+        if use_soft_land and ser is not None and cfg is not None:
+            with self._lock:
+                self._soft_land_in_progress = True
+            streamer = self._rc_streamer
+            if streamer is not None:
+                streamer.stop()
+                self._rc_streamer = None
+            try:
+                self._stream_throttle_ramp_down(ser, cfg, land_s)
+            except Exception:
+                pass
+            finally:
+                with self._lock:
+                    self._soft_land_in_progress = False
+        elif ser is not None and cfg is not None:
             try:
                 self._stream_disarm_hold(ser, cfg, min(1.0, self._disarm_hold_s()))
             except Exception:
                 pass
 
+        join_timeout = max(8.0, self._disarm_hold_s() + 5.0)
+        if use_soft_land:
+            join_timeout = max(join_timeout, land_s + 8.0)
         thread = self._thread
         if thread and thread.is_alive():
-            thread.join(timeout=max(8.0, self._disarm_hold_s() + 5.0))
+            thread.join(timeout=join_timeout)
 
         self._force_disarm_standalone(port, baud, cfg)
 
@@ -526,6 +664,9 @@ class BetaflightRcRunner:
                 self._state.status = "stopped"
                 self._state.current_action = None
             self._run_mode = "idle"
+            self._soft_land_on_stop = False
+            self._soft_land_in_progress = False
+        self._clear_mission_limit()
 
     def _run(
         self,
@@ -559,13 +700,16 @@ class BetaflightRcRunner:
 
                     self._execute_steps(ser, cfg, steps, start_t)
 
-                    self._stream_for(
-                        ser,
-                        cfg,
-                        self._channels(cfg, throttle_us=1000, arm_us=1000),
-                        0.8,
-                        start_t,
-                    )
+                    with self._lock:
+                        skip_tail_disarm = self._soft_land_on_stop or self._soft_land_in_progress
+                    if not skip_tail_disarm:
+                        self._stream_for(
+                            ser,
+                            cfg,
+                            self._channels(cfg, throttle_us=1000, arm_us=1000),
+                            0.8,
+                            start_t,
+                        )
                     if self._stop_event.is_set() and not self._emergency_land_steps:
                         self._finish_stopped()
                         return
@@ -586,6 +730,7 @@ class BetaflightRcRunner:
                 self._state.elapsed_s = time.monotonic() - start_t
         finally:
             self._stop_client_watchdog()
+            self._clear_mission_limit()
             if self._rc_streamer is not None:
                 self._rc_streamer.stop()
                 self._rc_streamer = None
@@ -640,6 +785,7 @@ class BetaflightRcRunner:
                 self._state.elapsed_s = time.monotonic() - start_t
         finally:
             self._stop_client_watchdog()
+            self._clear_mission_limit()
             if self._rc_streamer is not None:
                 self._rc_streamer.stop()
                 self._rc_streamer = None
@@ -655,7 +801,7 @@ class BetaflightRcRunner:
         start_t: float,
     ) -> None:
         for idx, step in enumerate(steps, start=1):
-            if self._try_interrupt(ser, cfg, start_t):
+            if self._try_abort(ser, cfg, start_t):
                 return
             with self._lock:
                 self._state.current_step = idx
@@ -694,7 +840,7 @@ class BetaflightRcRunner:
         deadline = time.monotonic() + max(0.0, seconds)
         self._send_channels(ser, channels)
         while time.monotonic() < deadline:
-            if self._try_interrupt(ser, cfg, start_t):
+            if self._try_abort(ser, cfg, start_t):
                 return
             with self._lock:
                 self._state.elapsed_s = time.monotonic() - start_t
@@ -796,7 +942,7 @@ class BetaflightRcRunner:
         next_check = 0.0
 
         while time.monotonic() < deadline:
-            if self._try_interrupt(ser, cfg, start_t):
+            if self._try_abort(ser, cfg, start_t):
                 return
 
             self._send_channels(ser, arm_channels)
@@ -852,7 +998,7 @@ class BetaflightRcRunner:
         deadline = time.monotonic() + 5.0
 
         while time.monotonic() < deadline:
-            if self._try_interrupt(ser, cfg, start_t):
+            if self._try_abort(ser, cfg, start_t):
                 return
             channels = self._channels(cfg, throttle_us=throttle, arm_us=self._arm_switch_us())
             self._send_channels(ser, channels)
@@ -1019,7 +1165,7 @@ class BetaflightRcRunner:
         last_success_at = time.monotonic()
 
         while time.monotonic() < deadline:
-            if self._try_interrupt(ser, cfg, start_t):
+            if self._try_abort(ser, cfg, start_t):
                 return
 
             probe = self._channels(
@@ -1111,7 +1257,7 @@ class BetaflightRcRunner:
             throttle = step.throttle_us or settings.betaflight_alt_hover_us
 
         while time.monotonic() < deadline:
-            if self._try_interrupt(ser, cfg, start_t):
+            if self._try_abort(ser, cfg, start_t):
                 return
 
             channels = self._channels(cfg, throttle_us=throttle, arm_us=self._arm_switch_us())
@@ -1328,6 +1474,32 @@ class BetaflightRcRunner:
             return self._channels(cfg, throttle_us=1000, arm_us=1000)
         raise RuntimeError(f"Unknown Betaflight action: {step.action}")
 
+    def _try_abort(
+        self,
+        ser: serial.Serial,
+        cfg: BetaflightRunConfig,
+        start_t: float,
+    ) -> bool:
+        """True — выйти из цикла: лимит миссии, STOP или экстренная посадка."""
+        if self._mission_time_exceeded():
+            land_s = max(2.0, float(settings.betaflight_link_loss_land_s))
+            if settings.betaflight_link_loss_soft_land_enabled:
+                self._stream_throttle_ramp_down(ser, cfg, land_s, start_t=start_t)
+                err = (
+                    f"Лимит миссии {self._mission_max_s:.0f} с — "
+                    f"плавная посадка {land_s:.0f} с и DISARM."
+                )
+            else:
+                self._stream_disarm_hold(ser, cfg, start_t=start_t)
+                err = f"Лимит миссии {self._mission_max_s:.0f} с — авто-DISARM."
+            with self._lock:
+                if self._state.status == "running":
+                    self._state.error = err
+            self._stop_event.set()
+            self._finish_stopped()
+            return True
+        return self._try_interrupt(ser, cfg, start_t)
+
     def _try_interrupt(
         self,
         ser: serial.Serial,
@@ -1344,6 +1516,12 @@ class BetaflightRcRunner:
                 self._emergency_land_steps = None
                 self._abort_remaining_steps = True
             self._execute_steps(ser, cfg, pending, start_t)
+            return True
+        with self._lock:
+            soft_land = self._soft_land_on_stop
+        if soft_land:
+            # Плавная посадка выполняется в stop(); здесь только выходим из цикла.
+            self._finish_stopped()
             return True
         self._stream_disarm_hold(ser, cfg, start_t=start_t)
         self._finish_stopped()

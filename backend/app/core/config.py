@@ -109,6 +109,11 @@ class Settings(BaseSettings):
     # Нет опроса status/heartbeat от UI N сек → авто-DISARM (обрыв Wi‑Fi с ПК).
     betaflight_client_watchdog_enabled: bool = True
     betaflight_client_heartbeat_timeout_s: float = 4.0
+    # Обрыв связи UI↔Pi: плавно снизить газ до idle за N с, затем DISARM (не мгновенный сброс).
+    betaflight_link_loss_soft_land_enabled: bool = True
+    betaflight_link_loss_land_s: float = 15.0
+    # Макс. длительность sequence/track (с) с ARM до авто-DISARM. None или ≤0 — выкл.
+    betaflight_mission_max_s: float | None = 25.0
 
     # Vision-tracker + режим follow (localhost:8001 на Pi).
     vision_tracker_url: str = "http://127.0.0.1:8001"
