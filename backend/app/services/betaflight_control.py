@@ -518,6 +518,7 @@ class BetaflightRcRunner:
             self._soft_land_on_stop = True
             if self._state.status == "running":
                 self._state.error = reason
+                self._state.current_action = "link_loss_land"
         self._stop_event.set()
 
     def _stream_disarm_hold(
@@ -542,18 +543,6 @@ class BetaflightRcRunner:
                     self._state.current_channels = list(channels)
             time.sleep(interval)
 
-    def _current_throttle_us(self) -> int:
-        with self._lock:
-            ch = self._state.current_channels
-        if not ch:
-            return settings.betaflight_alt_hover_us
-        rc_map = (settings.betaflight_rc_map or "AETR").upper()[:4]
-        if "T" in rc_map:
-            idx = rc_map.index("T")
-            if idx < len(ch):
-                return max(settings.betaflight_idle_throttle_us, int(ch[idx]))
-        return settings.betaflight_alt_hover_us
-
     def _stream_throttle_ramp_down(
         self,
         ser: serial.Serial,
@@ -561,12 +550,14 @@ class BetaflightRcRunner:
         duration_s: float,
         *,
         start_t: float | None = None,
+        floor_us: int | None = None,
     ) -> None:
-        """Плавно снижает газ до idle (ease-out), держит ARM+ANGLE — для обрыва связи."""
+        """Плавно снижает газ (ease-out), держит ARM+ANGLE. floor_us — мин. газ (не idle в воздухе)."""
         duration_s = max(2.0, float(duration_s))
-        idle = settings.betaflight_idle_throttle_us
+        floor = floor_us if floor_us is not None else settings.betaflight_land_throttle_us
+        floor = _clamp(floor, 1000, settings.betaflight_alt_hover_us)
         start_throttle = self._current_throttle_us()
-        start_throttle = max(idle, start_throttle)
+        start_throttle = max(floor, start_throttle)
         interval = 1.0 / max(1.0, cfg.hz)
         deadline = time.monotonic() + duration_s
         self._set_action("link_loss_land")
@@ -574,8 +565,8 @@ class BetaflightRcRunner:
             elapsed = duration_s - (deadline - time.monotonic())
             progress = min(1.0, max(0.0, elapsed / duration_s))
             eased = 1.0 - (1.0 - progress) * (1.0 - progress)
-            throttle = int(start_throttle - (start_throttle - idle) * eased)
-            throttle = max(idle, throttle)
+            throttle = int(start_throttle - (start_throttle - floor) * eased)
+            throttle = max(floor, throttle)
             channels = self._channels(
                 cfg,
                 throttle_us=throttle,
@@ -587,18 +578,75 @@ class BetaflightRcRunner:
                     self._state.elapsed_s = time.monotonic() - start_t
                     self._state.current_channels = list(channels)
             time.sleep(interval)
-        hold_channels = self._channels(
+
+    def _stream_link_loss_baro_land(
+        self,
+        ser: serial.Serial,
+        cfg: BetaflightRunConfig,
+        start_t: float,
+        duration_s: float,
+    ) -> None:
+        """Посадка как вручную: баро-P + плавное снижение цели, ARM не снимаем, RC без пауз."""
+        duration_s = max(2.0, float(duration_s))
+        interval = 1.0 / max(1.0, cfg.hz)
+        deadline = time.monotonic() + duration_s
+        land_step = BetaflightSequenceStep(
+            action="land",
+            seconds=duration_s,
+            throttle_us=settings.betaflight_land_throttle_us,
+        )
+        self._set_action("link_loss_land")
+        probe = self._channels(
             cfg,
-            throttle_us=idle,
+            throttle_us=self._current_throttle_us(),
             arm_us=self._arm_switch_us(),
         )
-        hold_deadline = time.monotonic() + 0.5
-        while time.monotonic() < hold_deadline:
-            self._send_channels(ser, hold_channels)
-            if start_t is not None:
-                with self._lock:
-                    self._state.elapsed_s = time.monotonic() - start_t
+        start_rel = self._poll_rel_alt_m(ser, cfg, probe, force=True)
+        if start_rel is None:
+            start_rel = self._alt_last_rel_m
+        start_rel = max(0.08, float(start_rel or 0.5))
+        throttle = self._current_throttle_us()
+        last_success_at = time.monotonic()
+        ground_m = settings.betaflight_alt_ground_m
+
+        while time.monotonic() < deadline:
+            elapsed = duration_s - (deadline - time.monotonic())
+            progress = min(1.0, max(0.0, elapsed / duration_s))
+            eased = 1.0 - (1.0 - progress) * (1.0 - progress)
+            target_alt = start_rel * (1.0 - eased)
+
+            channels = self._channels(cfg, throttle_us=throttle, arm_us=self._arm_switch_us())
+            rel = self._poll_rel_alt_m(ser, cfg, channels)
+
+            if rel is not None:
+                if rel <= max(ground_m, settings.betaflight_land_final_m):
+                    self._stream_land_touchdown(ser, cfg, start_t, from_throttle=throttle)
+                    return
+                error = target_alt - rel
+                target_throttle = self._alt_throttle_us(error, land_step, landing=True)
+                throttle = self._smooth_throttle_us(throttle, target_throttle, landing=True)
+                last_success_at = time.monotonic()
+            elif time.monotonic() - last_success_at > 1.5:
+                remaining = max(0.0, deadline - time.monotonic())
+                self._stream_throttle_ramp_down(
+                    ser,
+                    cfg,
+                    remaining,
+                    start_t=start_t,
+                    floor_us=settings.betaflight_land_throttle_us,
+                )
+                return
+
+            channels = self._channels(cfg, throttle_us=throttle, arm_us=self._arm_switch_us())
+            self._send_channels(ser, channels)
+            with self._lock:
+                self._state.elapsed_s = time.monotonic() - start_t
+                self._state.target_alt_m = round(target_alt, 2)
+                self._state.current_alt_m = round(rel, 2) if rel is not None else self._state.current_alt_m
+                self._state.current_channels = list(channels)
             time.sleep(interval)
+
+        self._stream_land_touchdown(ser, cfg, start_t, from_throttle=throttle)
 
     def _force_disarm_standalone(
         self,
@@ -648,10 +696,10 @@ class BetaflightRcRunner:
                 with self._lock:
                     if self._state.status == "running":
                         self._state.error = reason
-            self._stop_rc_streamer()
             land_s = self._soft_land_duration_s()
-            self._stream_throttle_ramp_down(ser, cfg, land_s, start_t=start_t)
+            self._stream_link_loss_baro_land(ser, cfg, start_t, land_s)
             self._stream_disarm_hold(ser, cfg, start_t=start_t)
+            self._stop_rc_streamer()
             self._stop_event.set()
             self._finish_stopped()
         finally:
@@ -911,7 +959,7 @@ class BetaflightRcRunner:
     def _send_channels(self, ser: serial.Serial, channels: list[int]) -> None:
         with self._lock:
             self._state.current_channels = list(channels)
-        if self._rc_streamer is not None and not self._soft_land_in_progress:
+        if self._rc_streamer is not None:
             self._rc_streamer.set_channels(channels)
             return
         payload = struct.pack("<" + "H" * len(channels), *channels)
@@ -1016,7 +1064,7 @@ class BetaflightRcRunner:
                     self._stream_for(ser, cfg, arm_channels, 0.6, start_t)
                     return
                 next_check = now + 0.35
-            time.sleep(interval)
+            self._stop_event.wait(interval)
 
         flags, msp_rc_arm = self._arm_diag(ser, cfg, arm_channels)
         if msp_rc_arm is not None and msp_rc_arm >= 1700:
