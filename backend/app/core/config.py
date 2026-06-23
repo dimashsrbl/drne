@@ -74,10 +74,15 @@ class Settings(BaseSettings):
     # takeoff_alt: сколько секунд держаться в коридоре ±tolerance перед завершением взлёта.
     betaflight_alt_takeoff_stable_s: float = 1.2
     # Посадка (land): дефолты, если в шаге не заданы throttle_us / seconds.
-    betaflight_land_seconds: float = 8.0
-    betaflight_land_throttle_us: int = 1080
-    # Ниже этой высоты (м) — фиксированный land throttle, затем disarm.
-    betaflight_land_final_m: float = 0.22
+    betaflight_land_seconds: float = 12.0
+    betaflight_land_throttle_us: int = 1140
+    # Ниже этой высоты (м) — финальная фаза: медленно к land_throttle.
+    betaflight_land_final_m: float = 0.18
+    # P и slew только для посадки (мягче чем взлёт/hold).
+    betaflight_land_p_gain: int = 38
+    betaflight_land_slew_us: int = 7
+    # Секунд плавно к idle после касания земли (не рубить 1000 мгновенно).
+    betaflight_land_touchdown_s: float = 1.2
     # Плавный баро-взлёт: ramp до отрыва, slew газа, стабилизация на высоте.
     betaflight_stick_center_roll_us: int = 1500
     betaflight_stick_center_pitch_us: int = 1500

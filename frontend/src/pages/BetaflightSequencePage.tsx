@@ -31,7 +31,7 @@ const baro1mMissionPreset: BetaflightSequenceStep[] = [
   { action: 'arm' },
   { action: 'takeoff_alt', seconds: 25, target_alt_m: 1.0, throttle_us: 1410, settle_s: 2.0 },
   { action: 'hold_alt', seconds: 4, throttle_us: 1410 },
-  { action: 'land', seconds: 8, throttle_us: 1080 },
+  { action: 'land', seconds: 12, throttle_us: 1140 },
   { action: 'disarm' },
 ]
 
@@ -41,7 +41,7 @@ const baro1mPreset: BetaflightSequenceStep[] = [
   { action: 'hold_alt', seconds: 6, throttle_us: 1410 },
   { action: 'forward', seconds: 0.8, throttle_us: 1410, stick_delta: 50 },
   { action: 'neutral', seconds: 0.6, throttle_us: 1410 },
-  { action: 'land', seconds: 8, throttle_us: 1080 },
+  { action: 'land', seconds: 12, throttle_us: 1140 },
   { action: 'disarm' },
 ]
 
@@ -49,7 +49,7 @@ const preset: BetaflightSequenceStep[] = [
   { action: 'arm' },
   { action: 'throttle', seconds: 1.2, throttle_us: 1110 },
   { action: 'neutral', seconds: 1.5, throttle_us: 1060 },
-  { action: 'land', seconds: 8, throttle_us: 1080 },
+  { action: 'land', seconds: 12, throttle_us: 1140 },
   { action: 'disarm' },
 ]
 
@@ -60,7 +60,7 @@ const lowTakeoffPreset: BetaflightSequenceStep[] = [
 ]
 
 const softLandPreset: BetaflightSequenceStep[] = [
-  { action: 'land', seconds: 8, throttle_us: 1080 },
+  { action: 'land', seconds: 12, throttle_us: 1140 },
   { action: 'disarm' },
 ]
 
@@ -71,12 +71,12 @@ const lowHopWithTurnPreset: BetaflightSequenceStep[] = [
   { action: 'forward', seconds: 0.7, throttle_us: 1060, stick_delta: 60 },
   { action: 'yaw_right', seconds: 0.7, throttle_us: 1060, stick_delta: 60 },
   { action: 'neutral', seconds: 0.8, throttle_us: 1050 },
-  { action: 'land', seconds: 8, throttle_us: 1080 },
+  { action: 'land', seconds: 12, throttle_us: 1140 },
   { action: 'disarm' },
 ]
 
 function defaultsForAction(action: BetaflightStepAction): Partial<BetaflightSequenceStep> {
-  if (action === 'land') return { seconds: 8, throttle_us: 1080 }
+  if (action === 'land') return { seconds: 12, throttle_us: 1140 }
   if (action === 'takeoff_alt') return { seconds: 25, target_alt_m: 1.0, throttle_us: 1410, settle_s: 2.0 }
   if (action === 'hold_alt') return { seconds: 5, throttle_us: 1410 }
   if (action === 'neutral' || action === 'wait') return { seconds: 3, throttle_us: 1410 }
@@ -192,7 +192,7 @@ export function BetaflightSequencePage() {
   }
 
   const emergencyLand = async () => {
-    const res = await betaflightApi.emergencyLand({ port, baud, seconds: 30, throttle_us: 1410 })
+    const res = await betaflightApi.emergencyLand({ port, baud, seconds: 30, throttle_us: 1140 })
     setStatus(res)
   }
 
@@ -333,7 +333,7 @@ export function BetaflightSequencePage() {
             Высоту задаёшь только в <code>takeoff_alt</code> (<code>target_alt_m</code>). Дальше neutral / forward / left и т.д. держат
             <b>ту же</b> высоту по баро (в шагах target не нужен). <code>hold_alt</code> — опционально другая цель, если укажешь target_alt_m.
             Перелёт вверх — снизь <code>ALT_HOLD_MIN</code> / <code>MAX_CLIMB</code> в .env на Pi.
-            Посадка по умолчанию: <code>land</code> 8 с, throttle 1080.
+            Посадка по умолчанию: <code>land</code> 12 с, мягкий сброс газа (мин. ~1140 µs).
             Если уводит в сторону — подстрой <code>DRONE_BETAFLIGHT_STICK_CENTER_ROLL/PITCH_US</code> на Pi (±5–15).
             Площадка ровная, ANGLE ON. Configurator закрыт.
             <br />
@@ -492,7 +492,7 @@ export function BetaflightSequencePage() {
                     max={2000}
                     value={
                       step.throttle_us ??
-                      (step.action === 'land' ? 1080 : step.action === 'takeoff_alt' || step.action === 'hold_alt' ? 1410 : 1000)
+                      (step.action === 'land' ? 1140 : step.action === 'takeoff_alt' || step.action === 'hold_alt' ? 1410 : 1000)
                     }
                     onChange={(e) => updateStep(idx, { throttle_us: clampNumber(Number(e.target.value), 1000, 2000) })}
                   />

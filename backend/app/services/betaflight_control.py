@@ -307,9 +307,13 @@ class BetaflightRcRunner:
         throttle_us: int | None = None,
     ) -> None:
         land_s = seconds if seconds is not None else settings.betaflight_emergency_land_s
-        hover = throttle_us or settings.betaflight_alt_hover_us
+        land_min = throttle_us or settings.betaflight_land_throttle_us
         land_steps = [
-            BetaflightSequenceStep(action="land", seconds=land_s, throttle_us=hover),
+            BetaflightSequenceStep(
+                action="land",
+                seconds=land_s,
+                throttle_us=land_min,
+            ),
             BetaflightSequenceStep(action="disarm"),
         ]
         cfg = BetaflightRunConfig(
@@ -890,6 +894,24 @@ class BetaflightRcRunner:
             t = self._state.target_alt_m
         return float(t) if t is not None and t > 0 else None
 
+    def _land_min_throttle_us(self, step: BetaflightSequenceStep) -> int:
+        return _clamp(
+            step.throttle_us if step.throttle_us is not None else settings.betaflight_land_throttle_us,
+            1000,
+            settings.betaflight_alt_hover_us,
+        )
+
+    def _current_throttle_us(self) -> int:
+        with self._lock:
+            ch = self._state.current_channels
+        rc_map = (settings.betaflight_rc_map or "AETR").strip().upper()[:4]
+        thr_idx = rc_map.find("T")
+        if thr_idx < 0:
+            thr_idx = 2
+        if ch and len(ch) > thr_idx:
+            return _clamp(ch[thr_idx])
+        return settings.betaflight_alt_hover_us
+
     def _alt_throttle_us(
         self,
         error_m: float,
@@ -898,26 +920,29 @@ class BetaflightRcRunner:
         hold: bool = False,
         landing: bool = False,
     ) -> int:
-        hover = step.throttle_us or settings.betaflight_alt_hover_us
+        land_min = self._land_min_throttle_us(step) if landing else None
+        hover = settings.betaflight_alt_hover_us if landing else (step.throttle_us or settings.betaflight_alt_hover_us)
         tol = settings.betaflight_alt_tolerance_m
         if abs(error_m) <= tol:
-            return _clamp(int(hover), 1000, settings.betaflight_max_throttle_us)
-        gain = settings.betaflight_alt_p_gain
-        if abs(error_m) < settings.betaflight_alt_near_band_m:
+            base = int(hover if not landing else max(land_min or hover, hover - 20))
+            return _clamp(base, 1000, settings.betaflight_max_throttle_us)
+        gain = settings.betaflight_land_p_gain if landing else settings.betaflight_alt_p_gain
+        if not landing and abs(error_m) < settings.betaflight_alt_near_band_m:
             gain = settings.betaflight_alt_p_gain_near
+        elif landing and abs(error_m) < settings.betaflight_alt_near_band_m:
+            gain = max(25, settings.betaflight_land_p_gain - 8)
         throttle = int(hover + gain * error_m)
         if error_m > 0:
             throttle = min(throttle, settings.betaflight_alt_max_climb_us)
             if hold:
                 throttle = max(throttle, settings.betaflight_alt_hold_min_us)
         elif landing:
-            # Только явная посадка: можно снижать газ сильнее к land_throttle.
-            overshoot = abs(error_m)
-            floor_us = settings.betaflight_alt_max_descend_us
-            if overshoot >= settings.betaflight_alt_overshoot_m:
-                floor_us = min(floor_us, settings.betaflight_land_throttle_us)
-            if overshoot >= 0.5:
-                floor_us = min(floor_us, 1050)
+            floor_us = land_min or settings.betaflight_land_throttle_us
+            # Не опускаться ниже посадочного минимума, пока высоко.
+            if abs(error_m) < settings.betaflight_land_final_m:
+                floor_us = land_min or settings.betaflight_land_throttle_us
+            else:
+                floor_us = max(floor_us, settings.betaflight_alt_max_descend_us - 40)
             throttle = max(throttle, floor_us)
         else:
             # Взлёт / hold в воздухе: мягко сбавляем, но не «рубим» до посадочного газа.
@@ -1030,11 +1055,35 @@ class BetaflightRcRunner:
                 self._state.target_alt_m = target
             self._stop_event.wait(interval)
 
-    def _smooth_throttle_us(self, current: int, target: int) -> int:
-        step = max(1, settings.betaflight_alt_throttle_slew_us)
+    def _smooth_throttle_us(self, current: int, target: int, *, landing: bool = False) -> int:
+        step_up = max(1, settings.betaflight_alt_throttle_slew_us)
+        step_down = max(1, settings.betaflight_land_slew_us if landing else settings.betaflight_alt_throttle_slew_us)
         if target > current:
-            return min(target, current + step)
-        return max(target, current - step)
+            return min(target, current + step_up)
+        return max(target, current - step_down)
+
+    def _stream_land_touchdown(
+        self,
+        ser: serial.Serial,
+        cfg: BetaflightRunConfig,
+        start_t: float,
+        *,
+        from_throttle: int,
+    ) -> None:
+        """Плавно к idle после касания земли."""
+        hold_s = max(0.4, float(settings.betaflight_land_touchdown_s))
+        idle = settings.betaflight_idle_throttle_us
+        interval = 1.0 / max(1.0, cfg.hz)
+        deadline = time.monotonic() + hold_s
+        throttle = from_throttle
+        while time.monotonic() < deadline:
+            throttle = self._smooth_throttle_us(throttle, idle, landing=True)
+            channels = self._channels(cfg, throttle_us=throttle, arm_us=self._arm_switch_us())
+            self._send_channels(ser, channels)
+            with self._lock:
+                self._state.elapsed_s = time.monotonic() - start_t
+                self._state.current_channels = list(channels)
+            time.sleep(interval)
 
     def _stream_alt_loop(
         self,
@@ -1056,12 +1105,10 @@ class BetaflightRcRunner:
         in_band_ticks = 0
         stable_need = max(1, int(cfg.hz * settings.betaflight_alt_takeoff_stable_s))
         land_final_m = settings.betaflight_land_final_m
-        if step.action == "land":
-            throttle = (
-                step.throttle_us
-                if step.throttle_us is not None
-                else settings.betaflight_land_throttle_us
-            )
+        landing = step.action == "land"
+        if landing:
+            throttle = self._current_throttle_us()
+            throttle = max(throttle, settings.betaflight_alt_hover_us - 30)
         else:
             throttle = step.throttle_us or settings.betaflight_alt_hover_us
 
@@ -1093,26 +1140,16 @@ class BetaflightRcRunner:
                     target_throttle = self._alt_throttle_us(error, step, hold=True)
                 else:
                     if rel_alt <= max(ground, target_rel_m):
-                        self._stream_for(
-                            ser,
-                            cfg,
-                            self._channels(cfg, throttle_us=1000, arm_us=self._arm_switch_us()),
-                            0.5,
-                            start_t,
-                        )
+                        self._stream_land_touchdown(ser, cfg, start_t, from_throttle=throttle)
                         return
                     error = target_rel_m - rel_alt
-                    if step.action == "land" and rel_alt <= land_final_m:
-                        target_throttle = (
-                            step.throttle_us
-                            if step.throttle_us is not None
-                            else settings.betaflight_land_throttle_us
-                        )
-                    elif step.action == "land":
+                    if landing and rel_alt <= land_final_m:
+                        target_throttle = self._land_min_throttle_us(step)
+                    elif landing:
                         target_throttle = self._alt_throttle_us(error, step, landing=True)
                     else:
                         target_throttle = self._alt_throttle_us(error, step)
-                throttle = self._smooth_throttle_us(throttle, target_throttle)
+                throttle = self._smooth_throttle_us(throttle, target_throttle, landing=landing)
                 last_success_at = time.monotonic()
             elif time.monotonic() - last_success_at > 2.5:
                 raise RuntimeError("Нет данных барометра (MSP_ALTITUDE). Проверь baro в Betaflight.")
