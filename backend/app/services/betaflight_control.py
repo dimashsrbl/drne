@@ -223,6 +223,8 @@ class BetaflightRcRunner:
         self._last_client_seen: float = 0.0
         self._watchdog_stop = threading.Event()
         self._watchdog_thread: threading.Thread | None = None
+        # True в фазах висения → авто POS HOLD (если включён канал).
+        self._hover_phase: bool = False
         self._watchdog_fired = False
         self._soft_land_on_stop = False
         self._soft_land_in_progress = False
@@ -912,6 +914,8 @@ class BetaflightRcRunner:
         for idx, step in enumerate(steps, start=1):
             if self._try_abort(ser, cfg, start_t):
                 return
+            # По умолчанию POS HOLD выключен; фазы висения включат сами.
+            self._hover_phase = False
             with self._lock:
                 self._state.current_step = idx
                 self._state.current_action = step.action
@@ -1359,6 +1363,8 @@ class BetaflightRcRunner:
         stable_need = max(1, int(cfg.hz * settings.betaflight_alt_takeoff_stable_s))
         land_final_m = settings.betaflight_land_final_m
         landing = step.action == "land"
+        # Висение (settle/hold) → авто POS HOLD; взлёт/посадка → выключен.
+        self._hover_phase = bool(hold and not landing)
         if landing:
             throttle = self._current_throttle_us()
             throttle = max(throttle, settings.betaflight_alt_hover_us - 30)
@@ -1520,10 +1526,12 @@ class BetaflightRcRunner:
         yaw_us: int | None = None,
         arm_us: int = 1000,
         angle_us: int | None = None,
+        poshold_us: int | None = None,
     ) -> list[int]:
         channels_count = cfg.channels if cfg is not None else settings.betaflight_rc_channels
         arm_channel = cfg.arm_channel if cfg is not None else settings.betaflight_arm_channel
         angle_channel = cfg.angle_channel if cfg is not None else settings.betaflight_angle_channel
+        poshold_channel = settings.betaflight_poshold_channel
         if angle_us is None:
             angle_us = 2000 if settings.betaflight_enable_angle else 1000
 
@@ -1544,6 +1552,14 @@ class BetaflightRcRunner:
             values[arm_channel - 1] = _clamp(arm_us)
         if 1 <= angle_channel <= channels_count:
             values[angle_channel - 1] = _clamp(angle_us)
+        if 1 <= poshold_channel <= channels_count:
+            if poshold_us is None:
+                # Авто: high в фазах висения, иначе low.
+                auto_on = settings.betaflight_poshold_auto and self._hover_phase
+                ph = settings.betaflight_poshold_us if auto_on else 1000
+            else:
+                ph = poshold_us
+            values[poshold_channel - 1] = _clamp(ph)
         return values[:channels_count]
 
     def _step_channels(self, step: BetaflightSequenceStep, cfg: BetaflightRunConfig) -> list[int]:

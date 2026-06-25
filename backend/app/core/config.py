@@ -54,6 +54,12 @@ class Settings(BaseSettings):
     betaflight_angle_channel: int = 6
     # True → AUX angle channel high (ANGLE mode). False for bench ARM on tilted surface.
     betaflight_enable_angle: bool = True
+    # GPS Position Hold: дрон сам держит точку (улица, ≥8 спутников, BF 4.5+).
+    # 0 = выключено. Иначе номер AUX-канала (например 7), настроенного в Modes как POS HOLD.
+    betaflight_poshold_channel: int = 0
+    betaflight_poshold_us: int = 2000
+    # Поднимать POS HOLD автоматически в фазах висения (после взлёта, hold_alt).
+    betaflight_poshold_auto: bool = True
     # Лимиты throttle (µs). BOB57 с пропами: взлёт ~1500, см. arm_test.
     betaflight_max_throttle_us: int = 1550
     betaflight_max_stick_delta: int = 200
