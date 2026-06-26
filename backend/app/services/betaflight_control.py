@@ -277,7 +277,7 @@ class BetaflightRcRunner:
     def _configure_mission_limit(self, request_max_s: float | None) -> None:
         hard = float(settings.betaflight_mission_hard_cap_s)
         if hard <= 0:
-            hard = 25.0
+            hard = 50.0
         # Жёсткий потолок всегда; UI/0 не отключает.
         cap = hard
         if request_max_s is not None and request_max_s > 0:

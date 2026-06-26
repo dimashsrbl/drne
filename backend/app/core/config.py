@@ -130,9 +130,9 @@ class Settings(BaseSettings):
     betaflight_link_loss_soft_land_enabled: bool = True
     betaflight_link_loss_land_s: float = 15.0
     # Жёсткий потолок любой миссии/track (с). Нельзя отключить из UI — всегда DISARM.
-    betaflight_mission_hard_cap_s: float = 25.0
+    betaflight_mission_hard_cap_s: float = 50.0
     # Дефолт для отображения (реально действует hard_cap).
-    betaflight_mission_max_s: float | None = 25.0
+    betaflight_mission_max_s: float | None = 50.0
 
     # Vision-tracker + режим follow (localhost:8001 на Pi).
     vision_tracker_url: str = "http://127.0.0.1:8001"

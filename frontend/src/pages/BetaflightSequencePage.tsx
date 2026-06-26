@@ -120,7 +120,7 @@ async function stopWithRetry(maxAttempts = 6): Promise<BetaflightSequenceStatus>
   throw lastErr instanceof Error ? lastErr : new Error('STOP не дошёл до Pi — проверь Wi‑Fi')
 }
 
-const MISSION_HARD_CAP_S = 25
+const MISSION_HARD_CAP_S = 50
 
 export function BetaflightSequencePage() {
   const { telemetry, wsStatus } = useTelemetry()
