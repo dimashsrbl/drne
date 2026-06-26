@@ -9,6 +9,7 @@ import serial
 
 from app.core.config import settings
 from app.schemas.betaflight import BetaflightSequenceStartRequest, BetaflightSequenceStep, BetaflightTrackStartRequest
+from app.services.betaflight_msp_gps import MSP_RAW_GPS, parse_msp_raw_gps
 from app.services.betaflight_port_lock import PortBusyError, betaflight_port_lock
 from app.services.inav_msp import build_msp_v1, msp_allow_arming, msp_rc_sticks_to_frame
 
@@ -33,6 +34,12 @@ class BetaflightRunnerState:
     current_channels: list[int] | None = None
     current_alt_m: float | None = None
     target_alt_m: float | None = None
+    lat: float | None = None
+    lon: float | None = None
+    gps_sats: int | None = None
+    gps_fix: int | None = None
+    gps_speed: float | None = None
+    gps_heading: float | None = None
     mission_max_s: float | None = None
     mission_remaining_s: float | None = None
 
@@ -223,8 +230,10 @@ class BetaflightRcRunner:
         self._last_client_seen: float = 0.0
         self._watchdog_stop = threading.Event()
         self._watchdog_thread: threading.Thread | None = None
-        # True в фазах висения → авто POS HOLD (если включён канал).
-        self._hover_phase: bool = False
+        # В воздухе (после отрыва) → авто POS HOLD; на посадке → выкл.
+        self._airborne: bool = False
+        self._landing_phase: bool = False
+        self._gps_poll_counter: int = 0
         self._watchdog_fired = False
         self._soft_land_on_stop = False
         self._soft_land_in_progress = False
@@ -589,6 +598,7 @@ class BetaflightRcRunner:
         duration_s: float,
     ) -> None:
         """Посадка как вручную: баро-P + плавное снижение цели, ARM не снимаем, RC без пауз."""
+        self._landing_phase = True
         duration_s = max(2.0, float(duration_s))
         interval = 1.0 / max(1.0, cfg.hz)
         deadline = time.monotonic() + duration_s
@@ -914,14 +924,15 @@ class BetaflightRcRunner:
         for idx, step in enumerate(steps, start=1):
             if self._try_abort(ser, cfg, start_t):
                 return
-            # По умолчанию POS HOLD выключен; фазы висения включат сами.
-            self._hover_phase = False
+            # POS HOLD управляется флагами _airborne / _landing_phase.
             with self._lock:
                 self._state.current_step = idx
                 self._state.current_action = step.action
                 if step.target_alt_m is not None:
                     self._state.target_alt_m = step.target_alt_m
             if step.action == "arm":
+                self._airborne = False
+                self._landing_phase = False
                 self._ensure_armed(ser, cfg, start_t, step.seconds)
                 self._capture_alt_baseline(ser, cfg)
             elif step.action == "takeoff_alt":
@@ -1142,7 +1153,55 @@ class BetaflightRcRunner:
         rel = alt_m - self._alt_baseline_m
         with self._lock:
             self._state.current_alt_m = round(rel, 2)
+        self._mark_airborne_if_needed(rel)
         return rel
+
+    def _mark_airborne_if_needed(self, rel: float | None) -> None:
+        if rel is not None and rel >= settings.betaflight_alt_liftoff_m:
+            self._airborne = True
+
+    def _gps_ok_for_poshold(self) -> bool:
+        if settings.betaflight_poshold_channel <= 0:
+            return False
+        with self._lock:
+            fix = self._state.gps_fix
+            sats = self._state.gps_sats
+        if fix is None:
+            return self._airborne
+        return fix >= settings.betaflight_poshold_min_fix and (sats or 0) >= settings.betaflight_poshold_min_sats
+
+    def _auto_poshold_on(self) -> bool:
+        if not settings.betaflight_poshold_auto:
+            return False
+        if not self._airborne or self._landing_phase:
+            return False
+        return self._gps_ok_for_poshold()
+
+    def _maybe_poll_gps(
+        self,
+        ser: serial.Serial,
+        cfg: BetaflightRunConfig,
+        channels: list[int],
+    ) -> None:
+        every = max(1, settings.betaflight_gps_poll_every_n)
+        self._gps_poll_counter += 1
+        if self._gps_poll_counter % every != 0:
+            return
+        payload = self._read_msp_while_streaming(ser, MSP_RAW_GPS, channels, cfg, timeout=0.25)
+        if not payload:
+            return
+        gps = parse_msp_raw_gps(payload)
+        if not gps:
+            return
+        with self._lock:
+            self._state.gps_fix = int(gps["gps_fix"])
+            self._state.gps_sats = int(gps["gps_sats"])
+            if int(gps["gps_fix"]) > 0:
+                self._state.lat = float(gps["lat"])
+                self._state.lon = float(gps["lon"])
+                self._state.gps_speed = float(gps["speed"])
+                if int(gps["gps_fix"]) >= 2:
+                    self._state.gps_heading = float(gps["heading"])
 
     def _active_target_alt_m(self, step: BetaflightSequenceStep) -> float | None:
         if step.target_alt_m is not None and step.target_alt_m > 0:
@@ -1226,6 +1285,7 @@ class BetaflightRcRunner:
             return self._alt_last_rel_m
         rel = parsed[0]
         self._alt_last_rel_m = rel
+        self._mark_airborne_if_needed(rel)
         return rel
 
     def _poll_altitude(
@@ -1247,6 +1307,8 @@ class BetaflightRcRunner:
         rel = alt_m - self._alt_baseline_m
         with self._lock:
             self._state.current_alt_m = round(rel, 2)
+        self._mark_airborne_if_needed(rel)
+        self._maybe_poll_gps(ser, cfg, channels)
         return rel, vario_cms
 
     def _stream_baro_hover(
@@ -1341,6 +1403,8 @@ class BetaflightRcRunner:
                 self._state.elapsed_s = time.monotonic() - start_t
                 self._state.current_channels = list(channels)
             time.sleep(interval)
+        self._airborne = False
+        self._landing_phase = False
 
     def _stream_alt_loop(
         self,
@@ -1363,8 +1427,8 @@ class BetaflightRcRunner:
         stable_need = max(1, int(cfg.hz * settings.betaflight_alt_takeoff_stable_s))
         land_final_m = settings.betaflight_land_final_m
         landing = step.action == "land"
-        # Висение (settle/hold) → авто POS HOLD; взлёт/посадка → выключен.
-        self._hover_phase = bool(hold and not landing)
+        if landing:
+            self._landing_phase = True
         if landing:
             throttle = self._current_throttle_us()
             throttle = max(throttle, settings.betaflight_alt_hover_us - 30)
@@ -1554,8 +1618,7 @@ class BetaflightRcRunner:
             values[angle_channel - 1] = _clamp(angle_us)
         if 1 <= poshold_channel <= channels_count:
             if poshold_us is None:
-                # Авто: high в фазах висения, иначе low.
-                auto_on = settings.betaflight_poshold_auto and self._hover_phase
+                auto_on = self._auto_poshold_on()
                 ph = settings.betaflight_poshold_us if auto_on else 1000
             else:
                 ph = poshold_us

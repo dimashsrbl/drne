@@ -56,10 +56,14 @@ class Settings(BaseSettings):
     betaflight_enable_angle: bool = True
     # GPS Position Hold: дрон сам держит точку (улица, ≥8 спутников, BF 4.5+).
     # 0 = выключено. Иначе номер AUX-канала (например 7), настроенного в Modes как POS HOLD.
-    betaflight_poshold_channel: int = 0
+    betaflight_poshold_channel: int = 7
     betaflight_poshold_us: int = 2000
-    # Поднимать POS HOLD автоматически в фазах висения (после взлёта, hold_alt).
+    # Поднимать POS HOLD автоматически в воздухе (после отрыва), выключать на посадке.
     betaflight_poshold_auto: bool = True
+    betaflight_poshold_min_sats: int = 6
+    betaflight_poshold_min_fix: int = 2
+    # Опрос MSP_RAW_GPS раз в N тиков RC-потока (~25 Гц) во время миссии.
+    betaflight_gps_poll_every_n: int = 60
     # Лимиты throttle (µs). BOB57 с пропами: взлёт ~1500, см. arm_test.
     betaflight_max_throttle_us: int = 1550
     betaflight_max_stick_delta: int = 200

@@ -8,6 +8,14 @@ import {
   type BetaflightVisionCheckResponse,
 } from '../api/betaflight'
 import { trackerUrl } from '../api/tracker'
+import { useTelemetry } from '../telemetry/TelemetryProvider'
+
+function gpsFixLabel(fix: number | null | undefined): string {
+  if (fix == null) return '—'
+  if (fix >= 2) return '3D'
+  if (fix === 1) return '2D'
+  return 'нет'
+}
 
 const actions: { value: BetaflightStepAction; label: string }[] = [
   { value: 'arm', label: 'ARM' },
@@ -113,6 +121,7 @@ async function stopWithRetry(maxAttempts = 6): Promise<BetaflightSequenceStatus>
 }
 
 export function BetaflightSequencePage() {
+  const { telemetry, wsStatus } = useTelemetry()
   const [port, setPort] = useState('/dev/ttyACM0')
   const [baud, setBaud] = useState(115200)
   const [steps, setSteps] = useState<BetaflightSequenceStep[]>(baro1mMissionPreset)
@@ -336,19 +345,17 @@ export function BetaflightSequencePage() {
       <section className="card">
         <div className="cardTitle">Betaflight Sequence Runner</div>
 
-        <div className="alert" style={{ marginBottom: 12, borderColor: 'rgba(234,179,8,0.5)', background: 'rgba(234,179,8,0.08)' }}>
-          <div className="alertTitle" style={{ color: '#fbbf24' }}>Важно: это не GPS-миссия</div>
+        <div className="alert" style={{ marginBottom: 12, borderColor: 'rgba(34,197,94,0.45)', background: 'rgba(34,197,94,0.08)' }}>
+          <div className="alertTitle" style={{ color: '#4ade80' }}>GPS + баро</div>
           <div className="alertBody">
-            Backend шлёт RC через MSP. Шаги <b>Takeoff (baro)</b> и <b>Land (baro)</b> держат высоту по барометру FC:
-            Высоту задаёшь только в <code>takeoff_alt</code> (<code>target_alt_m</code>). Дальше neutral / forward / left и т.д. держат
-            <b>ту же</b> высоту по баро (в шагах target не нужен). <code>hold_alt</code> — опционально другая цель, если укажешь target_alt_m.
-            Перелёт вверх — снизь <code>ALT_HOLD_MIN</code> / <code>MAX_CLIMB</code> в .env на Pi.
-            Посадка по умолчанию: <code>land</code> 12 с, мягкий сброс газа (мин. ~1140 µs).
-            Если уводит в сторону — подстрой <code>DRONE_BETAFLIGHT_STICK_CENTER_ROLL/PITCH_US</code> на Pi (±5–15).
-            Площадка ровная, ANGLE ON. Configurator закрыт.
+            Высота — барометр FC. Горизонталь в воздухе — <b>GPS POS HOLD</b> (канал 7, Betaflight Modes).
+            Нужен 3D fix (≥6 спутников) на улице. Координаты идут на фронт через <code>/telemetry/ws</code>.
             <br />
-            <b>Безопасность:</b> пока миссия идёт, Pi ждёт heartbeat (~4 с). Нет связи → баро-посадка ~15 с (газ снижается плавно, как LAND), потом DISARM. Не жми STOP при обрыве.
-            Кнопка STOP шлёт команду 6 раз. При обрыве Wi‑Fi всё равно держи пульт/выключатель питания под рукой.
+            Высоту задаёшь в <code>takeoff_alt</code> (<code>target_alt_m</code>). Дальше neutral / forward держат ту же высоту по баро.
+            <code>hold_alt</code> — опционально другая цель. Посадка: <code>land</code> 12 с, мягкий сброс газа.
+            Если уводит в сторону без GPS — подстрой <code>STICK_CENTER_ROLL/PITCH_US</code> на Pi.
+            <br />
+            <b>Безопасность:</b> heartbeat ~4 с → баро-посадка ~15 с и DISARM. STOP ×6 retry. Configurator закрыт.
           </div>
         </div>
 
@@ -576,6 +583,33 @@ export function BetaflightSequencePage() {
             LAND (baro)
           </button>
         </div>
+      </section>
+
+      <section className="card">
+        <div className="cardTitle">GPS телеметрия</div>
+        <div className="subtitle" style={{ marginBottom: 10 }}>
+          WS: <b>{wsStatus === 'open' ? 'онлайн' : wsStatus === 'connecting' ? 'подключение…' : 'нет связи'}</b>
+        </div>
+        <div className="kv" style={{ marginBottom: 12 }}>
+          <div className="k">фикс</div>
+          <div className="v" style={{ color: (telemetry?.gps_fix ?? 0) >= 2 ? '#4ade80' : '#f87171' }}>
+            {gpsFixLabel(telemetry?.gps_fix ?? null)}
+            {telemetry?.gps_sats != null ? ` · ${telemetry.gps_sats} sat` : ''}
+          </div>
+          <div className="k">lat</div>
+          <div className="v">{telemetry?.lat != null ? telemetry.lat.toFixed(6) : '—'}</div>
+          <div className="k">lon</div>
+          <div className="v">{telemetry?.lon != null ? telemetry.lon.toFixed(6) : '—'}</div>
+          <div className="k">курс</div>
+          <div className="v">{telemetry?.heading != null ? `${telemetry.heading.toFixed(0)}°` : '—'}</div>
+          <div className="k">скорость</div>
+          <div className="v">{telemetry?.speed != null ? `${telemetry.speed.toFixed(1)} м/с` : '—'}</div>
+        </div>
+        {(telemetry?.gps_fix ?? 0) < 2 ? (
+          <div className="hint" style={{ color: '#fbbf24' }}>
+            Для POS HOLD выйди на улицу и дождись 3D fix (≥6 спутников). В помещении GPS не работает.
+          </div>
+        ) : null}
       </section>
 
       <section className="card">

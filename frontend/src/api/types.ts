@@ -13,6 +13,8 @@ export type TelemetryResponse = {
   armed: boolean | null
   mode: string | null
   heading: number | null
+  gps_sats?: number | null
+  gps_fix?: number | null
   source?: string | null
   note?: string | null
 }

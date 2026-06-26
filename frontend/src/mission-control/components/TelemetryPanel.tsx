@@ -40,6 +40,12 @@ export function TelemetryPanel({
         <div className="v">{telemetry?.speed != null ? `${telemetry.speed.toFixed(1)} м/с` : '—'}</div>
         <div className="k">курс</div>
         <div className="v">{telemetry?.heading != null ? `${telemetry.heading.toFixed(0)}°` : '—'}</div>
+        <div className="k">GPS</div>
+        <div className="v">
+          {telemetry?.gps_fix != null
+            ? `${telemetry.gps_fix >= 2 ? '3D' : telemetry.gps_fix === 1 ? '2D' : 'нет'}${telemetry.gps_sats != null ? ` · ${telemetry.gps_sats} sat` : ''}`
+            : '—'}
+        </div>
         <div className="k">батарея</div>
         <div className="v">{telemetry?.battery != null ? `${telemetry.battery.toFixed(0)}%` : '—'}</div>
       </div>

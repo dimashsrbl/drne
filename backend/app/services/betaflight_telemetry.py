@@ -8,6 +8,7 @@ import time
 import serial
 
 from app.core.config import settings
+from app.services.betaflight_msp_gps import MSP_RAW_GPS, parse_msp_raw_gps
 from app.services.betaflight_control import BetaflightRcRunner, _msp_transaction, _parse_status
 from app.services.betaflight_port_lock import PortBusyError, betaflight_port_lock
 from app.services.bob57_bridge import Bob57BridgeAdapter
@@ -42,6 +43,7 @@ _BOX_NAMES: dict[int, str] = {
     17: "BLACKBOX",
     18: "FAILSAFE",
     19: "AIR MODE",
+    39: "POS HOLD",
 }
 
 
@@ -59,6 +61,16 @@ def _mode_from_flags(mode_flags: int) -> str:
     return "+".join(active) if active else "DISARM"
 
 
+def _gps_fix_label(fix: int | None) -> str:
+    if fix is None:
+        return "нет данных"
+    if fix >= 2:
+        return "3D"
+    if fix == 1:
+        return "2D"
+    return "нет"
+
+
 def _snapshot_from_runner(runner: BetaflightRcRunner) -> TelemetrySnapshot:
     state = runner.get_state()
     armed: bool | None = None
@@ -71,11 +83,19 @@ def _snapshot_from_runner(runner: BetaflightRcRunner) -> TelemetrySnapshot:
         note_parts.append(state.current_action)
     if state.elapsed_s:
         note_parts.append(f"{state.elapsed_s:.1f}s")
+    if state.gps_sats is not None:
+        note_parts.append(f"GPS {_gps_fix_label(state.gps_fix)} · {state.gps_sats} sat")
 
     return TelemetrySnapshot(
         status="connected",
+        lat=state.lat,
+        lon=state.lon,
         armed=armed,
         alt=state.current_alt_m,
+        speed=state.gps_speed,
+        heading=state.gps_heading,
+        gps_sats=state.gps_sats,
+        gps_fix=state.gps_fix,
         mode="BF SEQ",
         source="betaflight-msp",
         note=" · ".join(note_parts),
@@ -123,15 +143,40 @@ def read_betaflight_telemetry(
                 if heading < 0:
                     heading += 360.0
 
+            lat: float | None = None
+            lon: float | None = None
+            speed: float | None = None
+            gps_sats: int | None = None
+            gps_fix: int | None = None
+            gps_payload = _msp_transaction(ser, MSP_RAW_GPS, timeout=0.6)
+            if gps_payload:
+                gps = parse_msp_raw_gps(gps_payload)
+                if gps:
+                    gps_fix = int(gps["gps_fix"])
+                    gps_sats = int(gps["gps_sats"])
+                    if gps_fix > 0:
+                        lat = float(gps["lat"])
+                        lon = float(gps["lon"])
+                        speed = float(gps["speed"])
+                        if gps_fix >= 2:
+                            heading = float(gps["heading"])
+
             note = f"Betaflight MSP · {voltage_v:.1f}V" if voltage_v is not None else "Betaflight MSP"
+            if gps_sats is not None:
+                note += f" · GPS {_gps_fix_label(gps_fix)} ({gps_sats} sat)"
 
             return TelemetrySnapshot(
                 status="connected",
+                lat=lat,
+                lon=lon,
                 alt=alt_m,
                 battery=battery_pct,
                 armed=armed,
                 mode=mode,
+                speed=speed,
                 heading=heading,
+                gps_sats=gps_sats,
+                gps_fix=gps_fix,
                 source="betaflight-msp",
                 note=note,
                 updated_at_monotonic=time.monotonic(),

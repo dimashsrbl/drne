@@ -21,6 +21,8 @@ def _snap_to_response(snap) -> TelemetryResponse:
         armed=snap.armed,
         mode=snap.mode,
         heading=snap.heading,
+        gps_sats=snap.gps_sats,
+        gps_fix=snap.gps_fix,
         source=snap.source,
         note=snap.note,
     )

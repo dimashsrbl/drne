@@ -47,6 +47,16 @@ export function TelemetryStrip() {
 
         <Cell label="LAT">{t?.lat != null ? t.lat.toFixed(6) : '—'}</Cell>
         <Cell label="LON">{t?.lon != null ? t.lon.toFixed(6) : '—'}</Cell>
+        <Cell label="GPS">
+          {t?.gps_fix != null || t?.gps_sats != null ? (
+            <span style={{ color: (t?.gps_fix ?? 0) >= 2 ? undefined : '#f87171' }}>
+              {t?.gps_fix != null ? (t.gps_fix >= 2 ? '3D' : t.gps_fix === 1 ? '2D' : '—') : '—'}
+              {t?.gps_sats != null ? ` · ${t.gps_sats}` : ''}
+            </span>
+          ) : (
+            '—'
+          )}
+        </Cell>
         <Cell label="ALT">{t?.alt != null ? `${t.alt.toFixed(1)} m` : '—'}</Cell>
         <Cell label="HDG">{t?.heading != null ? `${t.heading.toFixed(0)}°` : '—'}</Cell>
         <Cell label="SPD">{t?.speed != null ? `${t.speed.toFixed(1)} m/s` : '—'}</Cell>

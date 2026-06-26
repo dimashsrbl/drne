@@ -15,6 +15,8 @@ class TelemetrySnapshot:
     armed: bool | None = None
     mode: str | None = None
     heading: float | None = None
+    gps_sats: int | None = None
+    gps_fix: int | None = None
     updated_at_monotonic: float | None = None
     source: str | None = None
     note: str | None = None
