@@ -92,6 +92,8 @@ def _snapshot_from_runner(runner: BetaflightRcRunner) -> TelemetrySnapshot:
         lon=state.lon,
         armed=armed,
         alt=state.current_alt_m,
+        baro_alt_m=state.baro_alt_m,
+        baro_baseline_m=state.baro_baseline_m,
         speed=state.gps_speed,
         heading=state.gps_heading,
         gps_sats=state.gps_sats,
@@ -130,10 +132,12 @@ def read_betaflight_telemetry(
                 battery_pct = _voltage_to_pct(voltage_v, cells)
 
             alt_m: float | None = None
+            baro_alt_m: float | None = None
             alt_payload = _msp_transaction(ser, MSP_ALTITUDE, timeout=0.6)
             if alt_payload and len(alt_payload) >= 4:
                 alt_cm = struct.unpack("<i", alt_payload[0:4])[0]
-                alt_m = alt_cm / 100.0
+                baro_alt_m = alt_cm / 100.0
+                alt_m = baro_alt_m
 
             heading: float | None = None
             att_payload = _msp_transaction(ser, MSP_ATTITUDE, timeout=0.6)
@@ -170,6 +174,7 @@ def read_betaflight_telemetry(
                 lat=lat,
                 lon=lon,
                 alt=alt_m,
+                baro_alt_m=baro_alt_m,
                 battery=battery_pct,
                 armed=armed,
                 mode=mode,

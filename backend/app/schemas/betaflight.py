@@ -28,7 +28,7 @@ class BetaflightSequenceStep(BaseModel):
     seconds: float = Field(default=1.0, ge=0.1, le=60.0)
     throttle_us: int | None = Field(default=None, ge=1000, le=2000)
     stick_delta: int | None = Field(default=None, ge=0, le=500)
-    # Для takeoff_alt / hold_alt: целевая высота над baseline (м). Для land — макс. время (с).
+    # Для takeoff_alt / hold_alt: подъём над baseline с ARM (м), не сырое баро. Для land — макс. время (с).
     target_alt_m: float | None = Field(default=None, ge=0.0, le=50.0)
     # После takeoff_alt: держать neutral + baro на высоте N сек (стабилизация перед манёврами).
     settle_s: float | None = Field(default=None, ge=0.0, le=30.0)
@@ -84,8 +84,11 @@ class BetaflightSequenceStatusResponse(BaseModel):
     error: str | None = None
     port: str | None = None
     current_channels: list[int] | None = None
-    current_alt_m: float | None = Field(default=None, description="Текущая относительная высота по барометру, м")
-    target_alt_m: float | None = Field(default=None, description="Целевая высота шага, м")
+    current_alt_m: float | None = Field(default=None, description="Подъём над baseline с ARM (AGL), м")
+    target_alt_m: float | None = Field(default=None, description="Целевой подъём AGL, м")
+    baro_alt_m: float | None = Field(default=None, description="Сырое баро FC, м")
+    baro_baseline_m: float | None = Field(default=None, description="Баро на ARM (=0 AGL), м")
+    target_baro_alt_m: float | None = Field(default=None, description="Целевое сырое баро (baseline + AGL), м")
     mission_max_s: float | None = Field(default=None, description="Лимит миссии, с")
     mission_remaining_s: float | None = Field(default=None, description="Осталось до лимита, с")
     gps_hold_active: bool | None = Field(default=None, description="Pi GPS hold корректирует roll/pitch")

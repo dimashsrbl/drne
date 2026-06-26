@@ -82,6 +82,9 @@ export type BetaflightSequenceStatus = {
   current_channels?: number[] | null
   current_alt_m?: number | null
   target_alt_m?: number | null
+  baro_alt_m?: number | null
+  baro_baseline_m?: number | null
+  target_baro_alt_m?: number | null
   mission_max_s?: number | null
   mission_remaining_s?: number | null
   gps_hold_active?: boolean | null

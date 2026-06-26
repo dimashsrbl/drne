@@ -9,6 +9,8 @@ class TelemetrySnapshot:
     lat: float | None = None
     lon: float | None = None
     alt: float | None = None
+    baro_alt_m: float | None = None
+    baro_baseline_m: float | None = None
     battery: float | None = None
     status: str = "unknown"
     speed: float | None = None

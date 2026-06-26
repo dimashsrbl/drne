@@ -40,6 +40,9 @@ class BetaflightRunnerState:
     current_channels: list[int] | None = None
     current_alt_m: float | None = None
     target_alt_m: float | None = None
+    baro_alt_m: float | None = None
+    baro_baseline_m: float | None = None
+    target_baro_alt_m: float | None = None
     lat: float | None = None
     lon: float | None = None
     gps_sats: int | None = None
@@ -864,7 +867,6 @@ class BetaflightRcRunner:
                             1.0,
                             start_t,
                         )
-                        self._capture_alt_baseline(ser, cfg)
 
                     self._execute_steps(ser, cfg, steps, start_t)
 
@@ -984,6 +986,7 @@ class BetaflightRcRunner:
                 self._state.current_action = step.action
                 if step.target_alt_m is not None:
                     self._state.target_alt_m = step.target_alt_m
+                    self._sync_target_baro_display(step.target_alt_m)
             if step.action == "arm":
                 self._airborne = False
                 self._landing_phase = False
@@ -1144,7 +1147,7 @@ class BetaflightRcRunner:
         raise RuntimeError(_arm_fail_message(cfg, mode_flags=flags, msp_rc_arm_us=msp_rc_arm))
 
     def _capture_alt_baseline(self, ser: serial.Serial, cfg: BetaflightRunConfig) -> None:
-        """Среднее баро на земле (armed, throttle min) — точнее одного снимка."""
+        """Среднее баро в момент ARM — это 0 AGL; цели в метрах плюсуются к baseline."""
         channels = self._channels(cfg, throttle_us=1000, arm_us=self._arm_switch_us())
         samples = max(1, settings.betaflight_alt_baseline_samples)
         readings: list[float] = []
@@ -1156,10 +1159,34 @@ class BetaflightRcRunner:
                     readings.append(parsed[0])
             time.sleep(0.07)
         if readings:
-            self._alt_baseline_m = sum(readings) / len(readings)
+            baseline = sum(readings) / len(readings)
+            self._alt_baseline_m = baseline
             self._alt_last_rel_m = 0.0
             with self._lock:
+                self._state.baro_baseline_m = round(baseline, 2)
+                self._state.baro_alt_m = round(baseline, 2)
                 self._state.current_alt_m = 0.0
+                self._sync_target_baro_display(self._state.target_alt_m)
+
+    def _sync_target_baro_display(self, target_agl_m: float | None) -> None:
+        if target_agl_m is None or self._alt_baseline_m is None:
+            self._state.target_baro_alt_m = None
+            return
+        self._state.target_baro_alt_m = round(self._alt_baseline_m + float(target_agl_m), 2)
+
+    def _apply_baro_reading(self, alt_m: float) -> float:
+        """Обновить сырое баро и AGL (сырое − baseline)."""
+        if self._alt_baseline_m is None:
+            rel = 0.0
+        else:
+            rel = alt_m - self._alt_baseline_m
+        self._alt_last_rel_m = rel
+        with self._lock:
+            self._state.baro_alt_m = round(alt_m, 2)
+            if self._alt_baseline_m is not None:
+                self._state.baro_baseline_m = round(self._alt_baseline_m, 2)
+            self._state.current_alt_m = round(rel, 2)
+        return rel
 
     def _ramp_until_liftoff(
         self,
@@ -1204,11 +1231,7 @@ class BetaflightRcRunner:
         if parsed is None:
             return None
         alt_m, _vario = parsed
-        if self._alt_baseline_m is None:
-            self._alt_baseline_m = alt_m
-        rel = alt_m - self._alt_baseline_m
-        with self._lock:
-            self._state.current_alt_m = round(rel, 2)
+        rel = self._apply_baro_reading(alt_m)
         self._mark_airborne_if_needed(rel)
         return rel
 
@@ -1465,11 +1488,7 @@ class BetaflightRcRunner:
         if parsed is None:
             return None
         alt_m, vario_cms = parsed
-        if self._alt_baseline_m is None:
-            self._alt_baseline_m = alt_m
-        rel = alt_m - self._alt_baseline_m
-        with self._lock:
-            self._state.current_alt_m = round(rel, 2)
+        rel = self._apply_baro_reading(alt_m)
         self._mark_airborne_if_needed(rel)
         self._maybe_poll_gps(ser, cfg, channels)
         return rel, vario_cms
@@ -1667,10 +1686,12 @@ class BetaflightRcRunner:
             raise RuntimeError("takeoff_alt требует target_alt_m > 0 (например 1.0)")
         self._ensure_armed(ser, cfg, start_t)
         time.sleep(0.35)
-        self._capture_alt_baseline(ser, cfg)
+        if self._alt_baseline_m is None:
+            raise RuntimeError("takeoff_alt: нет baseline баро. Добавь шаг arm перед взлётом.")
         self._ramp_until_liftoff(ser, cfg, step, start_t)
         with self._lock:
             self._state.target_alt_m = target
+            self._sync_target_baro_display(target)
         self._gps_hold_stream = False
         self._stream_alt_loop(
             ser,
@@ -1715,6 +1736,7 @@ class BetaflightRcRunner:
             )
         with self._lock:
             self._state.target_alt_m = target
+            self._sync_target_baro_display(target)
         self._gps_hold_stream = (
             settings.betaflight_gps_hold_enabled and self._airborne and not self._landing_phase
         )
@@ -1743,6 +1765,7 @@ class BetaflightRcRunner:
         )
         with self._lock:
             self._state.target_alt_m = 0.0
+            self._sync_target_baro_display(0.0)
         self._stream_alt_loop(
             ser,
             cfg,

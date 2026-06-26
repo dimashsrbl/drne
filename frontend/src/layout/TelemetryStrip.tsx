@@ -57,7 +57,8 @@ export function TelemetryStrip() {
             '—'
           )}
         </Cell>
-        <Cell label="ALT">{t?.alt != null ? `${t.alt.toFixed(1)} m` : '—'}</Cell>
+        <Cell label="BARO">{t?.baro_alt_m != null ? `${t.baro_alt_m.toFixed(1)} m` : t?.alt != null ? `${t.alt.toFixed(1)} m` : '—'}</Cell>
+        <Cell label="AGL">{t?.baro_baseline_m != null && t?.alt != null ? `+${t.alt.toFixed(1)} m` : '—'}</Cell>
         <Cell label="HDG">{t?.heading != null ? `${t.heading.toFixed(0)}°` : '—'}</Cell>
         <Cell label="SPD">{t?.speed != null ? `${t.speed.toFixed(1)} m/s` : '—'}</Cell>
 

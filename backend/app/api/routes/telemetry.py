@@ -15,6 +15,8 @@ def _snap_to_response(snap) -> TelemetryResponse:
         lat=snap.lat,
         lon=snap.lon,
         alt=snap.alt,
+        baro_alt_m=snap.baro_alt_m,
+        baro_baseline_m=snap.baro_baseline_m,
         battery=snap.battery,
         status=snap.status,
         speed=snap.speed,

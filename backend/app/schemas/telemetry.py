@@ -4,7 +4,9 @@ from pydantic import BaseModel, Field
 class TelemetryResponse(BaseModel):
     lat: float | None = Field(default=None)
     lon: float | None = Field(default=None)
-    alt: float | None = Field(default=None, description="Высота AGL, м")
+    alt: float | None = Field(default=None, description="Подъём над baseline (AGL), м")
+    baro_alt_m: float | None = Field(default=None, description="Сырое значение барометра FC, м")
+    baro_baseline_m: float | None = Field(default=None, description="Баро на ARM (=0 для AGL), м")
     battery: float | None = Field(default=None, description="Заряд батареи 0..100 %")
     status: str = Field(default="unknown")
     speed: float | None = Field(default=None, description="Горизонтальная скорость, м/с")

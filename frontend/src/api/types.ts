@@ -7,6 +7,8 @@ export type TelemetryResponse = {
   lat: number | null
   lon: number | null
   alt: number | null
+  baro_alt_m?: number | null
+  baro_baseline_m?: number | null
   battery: number | null
   status: string
   speed: number | null

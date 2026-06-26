@@ -302,9 +302,11 @@ export function BetaflightSequencePage() {
                 <div className="v">{vision.target_locked ? 'да' : 'нет'}</div>
                 <div className="k">action</div>
                 <div className="v">{status?.current_action ?? '—'}</div>
-                <div className="k">alt</div>
+                <div className="k">баро FC</div>
+                <div className="v">{status?.baro_alt_m != null ? `${status.baro_alt_m.toFixed(1)} m` : '—'}</div>
+                <div className="k">подъём</div>
                 <div className="v">
-                  {status?.current_alt_m != null ? `${status.current_alt_m.toFixed(2)} m` : '—'}
+                  {status?.current_alt_m != null ? `+${status.current_alt_m.toFixed(2)} m` : '—'}
                 </div>
               </div>
             ) : (
@@ -349,7 +351,8 @@ export function BetaflightSequencePage() {
             Высота — барометр FC. Горизонталь на месте — <b>GPS hold на Pi</b> (точка взлёта, без режима в Betaflight).
             На шагах forward/back/left/right GPS hold выключается; на neutral/hold_alt снова включается. Нужен 3D fix на улице.
             <br />
-            Высоту задаёшь в <code>takeoff_alt</code> (<code>target_alt_m</code>). Дальше neutral / forward держат ту же высоту по баро.
+            Высота: на <b>ARM</b> баро FC = <b>0</b> (baseline). В шагах <code>target_alt_m</code> — подъём в метрах
+            (3 м → баро baseline+3). На экране: сырое баро и «+подъём».
             <code>hold_alt</code> — опционально другая цель. Посадка: <code>land</code> 12 с, мягкий сброс газа.
             Если уводит в сторону без GPS — подстрой <code>STICK_CENTER_ROLL/PITCH_US</code> на Pi.
             <br />
@@ -460,7 +463,7 @@ export function BetaflightSequencePage() {
 
                 {step.action === 'takeoff_alt' ? (
                   <label className="field" style={{ maxWidth: 120 }}>
-                    <span>Высота, м</span>
+                    <span>Подъём, м (AGL)</span>
                     <input
                       type="number"
                       min={0.1}
@@ -473,7 +476,7 @@ export function BetaflightSequencePage() {
                 ) : null}
                 {step.action === 'hold_alt' ? (
                   <label className="field" style={{ maxWidth: 140 }}>
-                    <span>Высота, м (опц.)</span>
+                    <span>Подъём, м (опц.)</span>
                     <input
                       type="number"
                       min={0.1}
@@ -585,6 +588,20 @@ export function BetaflightSequencePage() {
           <div className="v">{telemetry?.lat != null ? telemetry.lat.toFixed(6) : '—'}</div>
           <div className="k">lon</div>
           <div className="v">{telemetry?.lon != null ? telemetry.lon.toFixed(6) : '—'}</div>
+          <div className="k">баро FC</div>
+          <div className="v">
+            {telemetry?.baro_alt_m != null
+              ? `${telemetry.baro_alt_m.toFixed(1)} m`
+              : telemetry?.alt != null
+                ? `${telemetry.alt.toFixed(1)} m`
+                : '—'}
+          </div>
+          <div className="k">подъём AGL</div>
+          <div className="v">
+            {telemetry?.baro_baseline_m != null && telemetry?.alt != null
+              ? `+${telemetry.alt.toFixed(1)} m`
+              : '—'}
+          </div>
           <div className="k">курс</div>
           <div className="v">{telemetry?.heading != null ? `${telemetry.heading.toFixed(0)}°` : '—'}</div>
           <div className="k">скорость</div>
@@ -621,10 +638,16 @@ export function BetaflightSequencePage() {
                 </div>
               </>
             ) : null}
-            <div className="k">alt (baro)</div>
+            <div className="k">баро FC</div>
             <div className="v">
-              {status.current_alt_m != null ? `${status.current_alt_m.toFixed(2)} m` : '—'}
-              {status.target_alt_m != null ? ` → ${status.target_alt_m.toFixed(2)} m` : ''}
+              {status.baro_alt_m != null ? `${status.baro_alt_m.toFixed(1)} m` : '—'}
+              {status.baro_baseline_m != null ? ` (0=${status.baro_baseline_m.toFixed(1)})` : ''}
+            </div>
+            <div className="k">подъём AGL</div>
+            <div className="v">
+              {status.current_alt_m != null ? `+${status.current_alt_m.toFixed(2)} m` : '—'}
+              {status.target_alt_m != null ? ` → цель +${status.target_alt_m.toFixed(2)} m` : ''}
+              {status.target_baro_alt_m != null ? ` (баро ${status.target_baro_alt_m.toFixed(1)})` : ''}
             </div>
             <div className="k">GPS hold (Pi)</div>
             <div className="v" style={{ color: status.gps_hold_active ? '#4ade80' : undefined }}>
