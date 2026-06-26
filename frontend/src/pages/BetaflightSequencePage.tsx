@@ -120,6 +120,8 @@ async function stopWithRetry(maxAttempts = 6): Promise<BetaflightSequenceStatus>
   throw lastErr instanceof Error ? lastErr : new Error('STOP не дошёл до Pi — проверь Wi‑Fi')
 }
 
+const MISSION_HARD_CAP_S = 25
+
 export function BetaflightSequencePage() {
   const { telemetry, wsStatus } = useTelemetry()
   const [port, setPort] = useState('/dev/ttyACM0')
@@ -131,8 +133,6 @@ export function BetaflightSequencePage() {
   const [error, setError] = useState<string | null>(null)
   const [vision, setVision] = useState<BetaflightVisionCheckResponse | null>(null)
   const [linkLost, setLinkLost] = useState(false)
-  const [missionLimitEnabled, setMissionLimitEnabled] = useState(true)
-  const [missionMaxS, setMissionMaxS] = useState(40)
 
   const json = useMemo(
     () =>
@@ -141,15 +141,13 @@ export function BetaflightSequencePage() {
           port,
           baud,
           steps,
-          max_mission_s: missionLimitEnabled ? missionMaxS : 0,
+          max_mission_s: MISSION_HARD_CAP_S,
         },
         null,
         2,
       ),
-    [port, baud, steps, missionLimitEnabled, missionMaxS],
+    [port, baud, steps],
   )
-
-  const missionMaxPayload = missionLimitEnabled ? missionMaxS : 0
 
   useEffect(() => {
     if (status?.status !== 'running') {
@@ -199,7 +197,7 @@ export function BetaflightSequencePage() {
   }
 
   const start = async () => {
-    const res = await betaflightApi.startSequence({ port, baud, steps, max_mission_s: missionMaxPayload })
+    const res = await betaflightApi.startSequence({ port, baud, steps, max_mission_s: MISSION_HARD_CAP_S })
     setStatus(res)
   }
 
@@ -235,7 +233,7 @@ export function BetaflightSequencePage() {
       target_alt_m: 1.0,
       throttle_us: 1410,
       wait_lock_s: 90,
-      max_mission_s: missionMaxPayload,
+      max_mission_s: MISSION_HARD_CAP_S,
     })
     setStatus(res)
   }
@@ -251,7 +249,7 @@ export function BetaflightSequencePage() {
       target_alt_m: 1.0,
       throttle_us: 1410,
       wait_lock_s: 90,
-      max_mission_s: missionMaxPayload,
+      max_mission_s: MISSION_HARD_CAP_S,
     })
     setStatus(res)
   }
@@ -385,24 +383,11 @@ export function BetaflightSequencePage() {
             <span>Baud</span>
             <input type="number" min={9600} max={1000000} value={baud} onChange={(e) => setBaud(Number(e.target.value))} />
           </label>
-          <label className="field" style={{ display: 'flex', alignItems: 'center', gap: 8, maxWidth: 200 }}>
-            <input
-              type="checkbox"
-              checked={missionLimitEnabled}
-              onChange={(e) => setMissionLimitEnabled(e.target.checked)}
-            />
+          <label className="field" style={{ maxWidth: 220 }}>
             <span>Лимит миссии</span>
-          </label>
-          <label className="field" style={{ maxWidth: 100 }}>
-            <span>сек</span>
-            <input
-              type="number"
-              min={1}
-              max={600}
-              disabled={!missionLimitEnabled}
-              value={missionMaxS}
-              onChange={(e) => setMissionMaxS(Number(e.target.value))}
-            />
+            <div className="hint" style={{ marginTop: 4, color: '#fbbf24' }}>
+              Жёстко <b>{MISSION_HARD_CAP_S} с</b> на Pi → STOP + DISARM (нельзя выключить)
+            </div>
           </label>
           <button className="btn" disabled={!!busy} onClick={() => void run('check', checkMsp)}>
             Check MSP

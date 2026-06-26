@@ -256,6 +256,8 @@ class BetaflightRcRunner:
         self._stop_lock = threading.Lock()
         self._mission_deadline_monotonic: float | None = None
         self._mission_max_s: float | None = None
+        self._mission_watchdog_stop = threading.Event()
+        self._mission_watchdog_thread: threading.Thread | None = None
 
     def touch_client_heartbeat(self) -> None:
         """Запрос от UI (status/heartbeat) — сброс таймера watchdog. Не вызывать из фоновых потоков Pi."""
@@ -273,23 +275,53 @@ class BetaflightRcRunner:
         return state
 
     def _configure_mission_limit(self, request_max_s: float | None) -> None:
-        if request_max_s is not None:
-            cap = None if request_max_s <= 0 else float(request_max_s)
-        else:
-            cap = settings.betaflight_mission_max_s
-        if cap is None or cap <= 0:
-            self._mission_deadline_monotonic = None
-            self._mission_max_s = None
-            with self._lock:
-                self._state.mission_max_s = None
-                self._state.mission_remaining_s = None
-            return
+        hard = float(settings.betaflight_mission_hard_cap_s)
+        if hard <= 0:
+            hard = 25.0
+        # Жёсткий потолок всегда; UI/0 не отключает.
+        cap = hard
+        if request_max_s is not None and request_max_s > 0:
+            cap = min(float(request_max_s), hard)
         cap = max(1.0, cap)
         self._mission_max_s = cap
         self._mission_deadline_monotonic = time.monotonic() + cap
         with self._lock:
             self._state.mission_max_s = cap
             self._state.mission_remaining_s = cap
+
+    def _start_mission_watchdog(self) -> None:
+        self._stop_mission_watchdog()
+        if self._mission_deadline_monotonic is None:
+            return
+        self._mission_watchdog_stop.clear()
+        self._mission_watchdog_thread = threading.Thread(
+            target=self._mission_watchdog_loop,
+            name="bf-mission-hard-cap",
+            daemon=True,
+        )
+        self._mission_watchdog_thread.start()
+
+    def _stop_mission_watchdog(self) -> None:
+        self._mission_watchdog_stop.set()
+
+    def _mission_watchdog_loop(self) -> None:
+        """Гарантированный STOP через hard_cap с — даже если поток миссии завис."""
+        deadline = self._mission_deadline_monotonic
+        if deadline is None:
+            return
+        while not self._mission_watchdog_stop.is_set():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            if self._mission_watchdog_stop.wait(min(0.25, remaining)):
+                return
+        with self._lock:
+            if self._state.status != "running":
+                return
+        self.stop(
+            reason=f"Жёсткий лимит миссии {self._mission_max_s:.0f} с",
+            soft_land=False,
+        )
 
     def _clear_mission_limit(self) -> None:
         self._mission_deadline_monotonic = None
@@ -437,6 +469,7 @@ class BetaflightRcRunner:
             )
             self._thread.start()
             self._start_client_watchdog()
+            self._start_mission_watchdog()
 
     def start(self, req: BetaflightSequenceStartRequest) -> None:
         cfg = BetaflightRunConfig(
@@ -482,6 +515,7 @@ class BetaflightRcRunner:
             )
             self._thread.start()
             self._start_client_watchdog()
+            self._start_mission_watchdog()
 
     def _set_action(self, action: str) -> None:
         with self._lock:
@@ -736,6 +770,7 @@ class BetaflightRcRunner:
 
     def stop(self, *, reason: str | None = None, soft_land: bool = False) -> None:
         self._stop_client_watchdog()
+        self._stop_mission_watchdog()
         use_soft_land = soft_land and settings.betaflight_link_loss_soft_land_enabled
         land_s = self._soft_land_duration_s()
 
@@ -865,6 +900,7 @@ class BetaflightRcRunner:
                 self._state.elapsed_s = time.monotonic() - start_t
         finally:
             self._stop_client_watchdog()
+            self._stop_mission_watchdog()
             self._clear_mission_limit()
             if self._rc_streamer is not None:
                 self._rc_streamer.stop()
@@ -922,6 +958,7 @@ class BetaflightRcRunner:
                 self._state.elapsed_s = time.monotonic() - start_t
         finally:
             self._stop_client_watchdog()
+            self._stop_mission_watchdog()
             self._clear_mission_limit()
             if self._rc_streamer is not None:
                 self._rc_streamer.stop()
@@ -1813,12 +1850,11 @@ class BetaflightRcRunner:
                 self._execute_soft_land_and_stop(ser, cfg, start_t)
                 return True
         if self._mission_time_exceeded():
-            land_s = self._soft_land_duration_s()
-            err = (
-                f"Лимит миссии {self._mission_max_s:.0f} с — "
-                f"плавная посадка {land_s:.0f} с и DISARM."
-            )
-            self._execute_soft_land_and_stop(ser, cfg, start_t, reason=err)
+            err = f"Лимит миссии {self._mission_max_s:.0f} с — DISARM."
+            with self._lock:
+                self._state.error = err
+            self._stream_disarm_hold(ser, cfg, start_t=start_t)
+            self._finish_stopped()
             return True
         return self._try_interrupt(ser, cfg, start_t)
 
