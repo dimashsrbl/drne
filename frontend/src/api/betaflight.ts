@@ -84,6 +84,9 @@ export type BetaflightSequenceStatus = {
   target_alt_m?: number | null
   mission_max_s?: number | null
   mission_remaining_s?: number | null
+  gps_hold_active?: boolean | null
+  gps_home_lat?: number | null
+  gps_home_lon?: number | null
 }
 
 export const betaflightApi = {

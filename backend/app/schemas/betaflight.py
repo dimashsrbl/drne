@@ -42,7 +42,6 @@ class BetaflightSequenceStartRequest(BaseModel):
     channels: int | None = Field(default=None, ge=4, le=18)
     arm_channel: int | None = Field(default=None, ge=1, le=18)
     angle_channel: int | None = Field(default=None, ge=1, le=18)
-    # Лимит всей миссии (с). None → из settings (40). 0 → без лимита.
     max_mission_s: float | None = Field(default=None, ge=0.0, le=600.0)
 
 
@@ -89,3 +88,6 @@ class BetaflightSequenceStatusResponse(BaseModel):
     target_alt_m: float | None = Field(default=None, description="Целевая высота шага, м")
     mission_max_s: float | None = Field(default=None, description="Лимит миссии, с")
     mission_remaining_s: float | None = Field(default=None, description="Осталось до лимита, с")
+    gps_hold_active: bool | None = Field(default=None, description="Pi GPS hold корректирует roll/pitch")
+    gps_home_lat: float | None = Field(default=None, description="Точка удержания (lat)")
+    gps_home_lon: float | None = Field(default=None, description="Точка удержания (lon)")

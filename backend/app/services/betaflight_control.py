@@ -9,6 +9,7 @@ import serial
 
 from app.core.config import settings
 from app.schemas.betaflight import BetaflightSequenceStartRequest, BetaflightSequenceStep, BetaflightTrackStartRequest
+from app.services.betaflight_gps_hold import body_correction_m, geo_offset_m, stick_deltas_us
 from app.services.betaflight_msp_gps import MSP_RAW_GPS, parse_msp_raw_gps
 from app.services.betaflight_port_lock import PortBusyError, betaflight_port_lock
 from app.services.inav_msp import build_msp_v1, msp_allow_arming, msp_rc_sticks_to_frame
@@ -17,9 +18,14 @@ MSP_API_VERSION = 1
 MSP_FC_VARIANT = 2
 MSP_FC_VERSION = 3
 MSP_STATUS = 101
+MSP_ATTITUDE = 108
 MSP_ALTITUDE = 109
 MSP_RC = 105
 MSP_SET_RAW_RC = 200
+
+_GPS_HOLD_MANEUVER_ACTIONS = frozenset(
+    {"forward", "back", "left", "right", "yaw_left", "yaw_right", "throttle"},
+)
 
 
 @dataclass
@@ -40,6 +46,9 @@ class BetaflightRunnerState:
     gps_fix: int | None = None
     gps_speed: float | None = None
     gps_heading: float | None = None
+    gps_hold_active: bool | None = None
+    gps_home_lat: float | None = None
+    gps_home_lon: float | None = None
     mission_max_s: float | None = None
     mission_remaining_s: float | None = None
 
@@ -234,6 +243,13 @@ class BetaflightRcRunner:
         self._airborne: bool = False
         self._landing_phase: bool = False
         self._gps_poll_counter: int = 0
+        self._gps_hold_stream: bool = False
+        self._gps_home_lat: float | None = None
+        self._gps_home_lon: float | None = None
+        self._gps_capture_buf: list[tuple[float, float]] = []
+        self._gps_hold_roll_corr: int = 0
+        self._gps_hold_pitch_corr: int = 0
+        self._hold_heading_deg: float | None = None
         self._watchdog_fired = False
         self._soft_land_on_stop = False
         self._soft_land_in_progress = False
@@ -924,7 +940,8 @@ class BetaflightRcRunner:
         for idx, step in enumerate(steps, start=1):
             if self._try_abort(ser, cfg, start_t):
                 return
-            # POS HOLD управляется флагами _airborne / _landing_phase.
+            # POS HOLD на FC / GPS hold на Pi — по типу шага.
+            self._update_gps_hold_stream_for_step(step)
             with self._lock:
                 self._state.current_step = idx
                 self._state.current_action = step.action
@@ -933,6 +950,8 @@ class BetaflightRcRunner:
             if step.action == "arm":
                 self._airborne = False
                 self._landing_phase = False
+                self._gps_hold_stream = False
+                self._reset_gps_hold_home()
                 self._ensure_armed(ser, cfg, start_t, step.seconds)
                 self._capture_alt_baseline(ser, cfg)
             elif step.action == "takeoff_alt":
@@ -1160,6 +1179,103 @@ class BetaflightRcRunner:
         if rel is not None and rel >= settings.betaflight_alt_liftoff_m:
             self._airborne = True
 
+    def _reset_gps_hold_home(self) -> None:
+        self._gps_home_lat = None
+        self._gps_home_lon = None
+        self._gps_capture_buf.clear()
+        self._gps_hold_roll_corr = 0
+        self._gps_hold_pitch_corr = 0
+        self._hold_heading_deg = None
+        with self._lock:
+            self._state.gps_hold_active = False
+            self._state.gps_home_lat = None
+            self._state.gps_home_lon = None
+
+    def _update_gps_hold_stream_for_step(self, step: BetaflightSequenceStep) -> None:
+        if not settings.betaflight_gps_hold_enabled:
+            self._gps_hold_stream = False
+            return
+        if step.action in _GPS_HOLD_MANEUVER_ACTIONS or step.action in {"arm", "disarm", "land", "takeoff_alt"}:
+            self._gps_hold_stream = False
+            return
+        self._gps_hold_stream = self._airborne and not self._landing_phase
+
+    @staticmethod
+    def _slew_int(current: int, target: int, step: int) -> int:
+        if target > current:
+            return min(target, current + step)
+        return max(target, current - step)
+
+    def _gps_hold_ok(self) -> bool:
+        if not settings.betaflight_gps_hold_enabled or not self._airborne or self._landing_phase:
+            return False
+        with self._lock:
+            fix = self._state.gps_fix
+            sats = self._state.gps_sats
+            lat = self._state.lat
+            lon = self._state.lon
+        if lat is None or lon is None:
+            return False
+        if fix is None:
+            return False
+        return fix >= settings.betaflight_gps_hold_min_fix and (sats or 0) >= settings.betaflight_gps_hold_min_sats
+
+    def _maybe_capture_gps_home(self) -> None:
+        if self._gps_home_lat is not None or not self._gps_hold_stream or not self._gps_hold_ok():
+            return
+        with self._lock:
+            lat = self._state.lat
+            lon = self._state.lon
+        if lat is None or lon is None:
+            return
+        self._gps_capture_buf.append((lat, lon))
+        need = max(1, settings.betaflight_gps_hold_capture_samples)
+        if len(self._gps_capture_buf) < need:
+            return
+        self._gps_home_lat = sum(p[0] for p in self._gps_capture_buf) / len(self._gps_capture_buf)
+        self._gps_home_lon = sum(p[1] for p in self._gps_capture_buf) / len(self._gps_capture_buf)
+        self._gps_capture_buf.clear()
+        with self._lock:
+            self._state.gps_home_lat = round(self._gps_home_lat, 7)
+            self._state.gps_home_lon = round(self._gps_home_lon, 7)
+
+    def _apply_pi_gps_hold(self, roll_us: int, pitch_us: int) -> tuple[int, int]:
+        if not self._gps_hold_stream or not settings.betaflight_gps_hold_enabled:
+            return roll_us, pitch_us
+
+        self._maybe_capture_gps_home()
+        target_roll = 0
+        target_pitch = 0
+        active = self._gps_home_lat is not None and self._gps_hold_ok()
+
+        if active and self._gps_home_lat is not None and self._gps_home_lon is not None:
+            with self._lock:
+                lat = self._state.lat
+                lon = self._state.lon
+            heading = self._hold_heading_deg
+            if lat is not None and lon is not None and heading is not None:
+                north, east = geo_offset_m(self._gps_home_lat, self._gps_home_lon, lat, lon)
+                forward_m, right_m = body_correction_m(north, east, heading)
+                target_roll, target_pitch = stick_deltas_us(
+                    forward_m,
+                    right_m,
+                    p_gain=settings.betaflight_gps_hold_p_gain,
+                    max_us=settings.betaflight_gps_hold_max_us,
+                    deadband_m=settings.betaflight_gps_hold_deadband_m,
+                )
+
+        slew = max(1, settings.betaflight_gps_hold_slew_us)
+        self._gps_hold_roll_corr = self._slew_int(self._gps_hold_roll_corr, target_roll, slew)
+        self._gps_hold_pitch_corr = self._slew_int(self._gps_hold_pitch_corr, target_pitch, slew)
+
+        with self._lock:
+            self._state.gps_hold_active = active
+
+        return (
+            _clamp(roll_us + self._gps_hold_roll_corr),
+            _clamp(pitch_us + self._gps_hold_pitch_corr),
+        )
+
     def _gps_ok_for_poshold(self) -> bool:
         if settings.betaflight_poshold_channel <= 0:
             return False
@@ -1171,6 +1287,8 @@ class BetaflightRcRunner:
         return fix >= settings.betaflight_poshold_min_fix and (sats or 0) >= settings.betaflight_poshold_min_sats
 
     def _auto_poshold_on(self) -> bool:
+        if settings.betaflight_gps_hold_enabled:
+            return False
         if not settings.betaflight_poshold_auto:
             return False
         if not self._airborne or self._landing_phase:
@@ -1184,24 +1302,32 @@ class BetaflightRcRunner:
         channels: list[int],
     ) -> None:
         every = max(1, settings.betaflight_gps_poll_every_n)
+        if self._gps_hold_stream:
+            every = min(every, 3)
         self._gps_poll_counter += 1
         if self._gps_poll_counter % every != 0:
             return
         payload = self._read_msp_while_streaming(ser, MSP_RAW_GPS, channels, cfg, timeout=0.25)
-        if not payload:
-            return
-        gps = parse_msp_raw_gps(payload)
-        if not gps:
-            return
-        with self._lock:
-            self._state.gps_fix = int(gps["gps_fix"])
-            self._state.gps_sats = int(gps["gps_sats"])
-            if int(gps["gps_fix"]) > 0:
-                self._state.lat = float(gps["lat"])
-                self._state.lon = float(gps["lon"])
-                self._state.gps_speed = float(gps["speed"])
-                if int(gps["gps_fix"]) >= 2:
-                    self._state.gps_heading = float(gps["heading"])
+        if payload:
+            gps = parse_msp_raw_gps(payload)
+            if gps:
+                with self._lock:
+                    self._state.gps_fix = int(gps["gps_fix"])
+                    self._state.gps_sats = int(gps["gps_sats"])
+                    if int(gps["gps_fix"]) > 0:
+                        self._state.lat = float(gps["lat"])
+                        self._state.lon = float(gps["lon"])
+                        self._state.gps_speed = float(gps["speed"])
+                        if int(gps["gps_fix"]) >= 2:
+                            self._state.gps_heading = float(gps["heading"])
+        if self._gps_hold_stream and (self._gps_poll_counter % max(1, every * 2) == 0):
+            att = self._read_msp_while_streaming(ser, MSP_ATTITUDE, channels, cfg, timeout=0.22)
+            if att and len(att) >= 6:
+                yaw_tenth = struct.unpack("<h", att[4:6])[0]
+                heading = float(yaw_tenth) / 10.0
+                if heading < 0:
+                    heading += 360.0
+                self._hold_heading_deg = heading
 
     def _active_target_alt_m(self, step: BetaflightSequenceStep) -> float | None:
         if step.target_alt_m is not None and step.target_alt_m > 0:
@@ -1405,6 +1531,8 @@ class BetaflightRcRunner:
             time.sleep(interval)
         self._airborne = False
         self._landing_phase = False
+        self._gps_hold_stream = False
+        self._reset_gps_hold_home()
 
     def _stream_alt_loop(
         self,
@@ -1506,6 +1634,7 @@ class BetaflightRcRunner:
         self._ramp_until_liftoff(ser, cfg, step, start_t)
         with self._lock:
             self._state.target_alt_m = target
+        self._gps_hold_stream = False
         self._stream_alt_loop(
             ser,
             cfg,
@@ -1516,6 +1645,9 @@ class BetaflightRcRunner:
         )
         settle_s = step.settle_s if step.settle_s is not None else settings.betaflight_alt_takeoff_settle_s
         if settle_s > 0:
+            self._gps_hold_stream = (
+                settings.betaflight_gps_hold_enabled and self._airborne and not self._landing_phase
+            )
             settle_step = BetaflightSequenceStep(
                 action="hold_alt",
                 seconds=settle_s,
@@ -1546,6 +1678,9 @@ class BetaflightRcRunner:
             )
         with self._lock:
             self._state.target_alt_m = target
+        self._gps_hold_stream = (
+            settings.betaflight_gps_hold_enabled and self._airborne and not self._landing_phase
+        )
         self._stream_alt_loop(
             ser,
             cfg,
@@ -1603,6 +1738,8 @@ class BetaflightRcRunner:
         p = settings.betaflight_stick_center_pitch_us if pitch_us is None else pitch_us
         y = settings.betaflight_stick_center_yaw_us if yaw_us is None else yaw_us
         t = settings.betaflight_idle_throttle_us if throttle_us is None else throttle_us
+        if self._gps_hold_stream:
+            r, p = self._apply_pi_gps_hold(r, p)
         values = msp_rc_sticks_to_frame(
             roll_us=_clamp(r),
             pitch_us=_clamp(p),

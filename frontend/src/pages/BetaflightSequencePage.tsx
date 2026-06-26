@@ -348,8 +348,8 @@ export function BetaflightSequencePage() {
         <div className="alert" style={{ marginBottom: 12, borderColor: 'rgba(34,197,94,0.45)', background: 'rgba(34,197,94,0.08)' }}>
           <div className="alertTitle" style={{ color: '#4ade80' }}>GPS + баро</div>
           <div className="alertBody">
-            Высота — барометр FC. Горизонталь в воздухе — <b>GPS POS HOLD</b> (канал 7, Betaflight Modes).
-            Нужен 3D fix (≥6 спутников) на улице. Координаты идут на фронт через <code>/telemetry/ws</code>.
+            Высота — барометр FC. Горизонталь на месте — <b>GPS hold на Pi</b> (точка взлёта, без режима в Betaflight).
+            На шагах forward/back/left/right GPS hold выключается; на neutral/hold_alt снова включается. Нужен 3D fix на улице.
             <br />
             Высоту задаёшь в <code>takeoff_alt</code> (<code>target_alt_m</code>). Дальше neutral / forward держат ту же высоту по баро.
             <code>hold_alt</code> — опционально другая цель. Посадка: <code>land</code> 12 с, мягкий сброс газа.
@@ -640,6 +640,13 @@ export function BetaflightSequencePage() {
             <div className="v">
               {status.current_alt_m != null ? `${status.current_alt_m.toFixed(2)} m` : '—'}
               {status.target_alt_m != null ? ` → ${status.target_alt_m.toFixed(2)} m` : ''}
+            </div>
+            <div className="k">GPS hold (Pi)</div>
+            <div className="v" style={{ color: status.gps_hold_active ? '#4ade80' : undefined }}>
+              {status.gps_hold_active ? 'активен' : 'выкл'}
+              {status.gps_home_lat != null && status.gps_home_lon != null
+                ? ` · ${status.gps_home_lat.toFixed(5)}, ${status.gps_home_lon.toFixed(5)}`
+                : ''}
             </div>
             <div className="k">port</div>
             <div className="v">{status.port ?? '-'}</div>

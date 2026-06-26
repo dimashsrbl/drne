@@ -32,6 +32,9 @@ def _status_response(runner: BetaflightRcRunner) -> BetaflightSequenceStatusResp
         target_alt_m=state.target_alt_m,
         mission_max_s=state.mission_max_s,
         mission_remaining_s=state.mission_remaining_s,
+        gps_hold_active=state.gps_hold_active,
+        gps_home_lat=state.gps_home_lat,
+        gps_home_lon=state.gps_home_lon,
     )
 
 
