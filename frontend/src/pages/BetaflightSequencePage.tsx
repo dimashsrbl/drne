@@ -7,7 +7,7 @@ import {
   type BetaflightStepAction,
   type BetaflightVisionCheckResponse,
 } from '../api/betaflight'
-import { trackerUrl } from '../api/tracker'
+import { fetchDetectionEnabled, setDetectionEnabled, trackerUrl } from '../api/tracker'
 import { useTelemetry } from '../telemetry/TelemetryProvider'
 
 function gpsFixLabel(fix: number | null | undefined): string {
@@ -132,6 +132,7 @@ export function BetaflightSequencePage() {
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [vision, setVision] = useState<BetaflightVisionCheckResponse | null>(null)
+  const [detectionOn, setDetectionOn] = useState(true)
   const [linkLost, setLinkLost] = useState(false)
 
   const json = useMemo(
@@ -174,6 +175,7 @@ export function BetaflightSequencePage() {
 
   useEffect(() => {
     void betaflightApi.visionCheck().then(setVision).catch(() => {})
+    void fetchDetectionEnabled().then(setDetectionOn).catch(() => {})
   }, [])
 
   const run = async (label: string, fn: () => Promise<unknown>) => {
@@ -209,6 +211,15 @@ export function BetaflightSequencePage() {
   const emergencyLand = async () => {
     const res = await betaflightApi.emergencyLand({ port, baud, seconds: 30, throttle_us: 1140 })
     setStatus(res)
+  }
+
+  const toggleDetection = async () => {
+    const next = !detectionOn
+    const enabled = await setDetectionEnabled(next)
+    setDetectionOn(enabled)
+    if (!enabled) {
+      await fetch(trackerUrl('/unlock'), { method: 'POST' })
+    }
   }
 
   const checkVision = async () => {
@@ -300,6 +311,10 @@ export function BetaflightSequencePage() {
                 <div className="v">{vision.camera_status || '—'}</div>
                 <div className="k">locked</div>
                 <div className="v">{vision.target_locked ? 'да' : 'нет'}</div>
+                <div className="k">детекция</div>
+                <div className="v" style={{ color: detectionOn ? undefined : '#fbbf24' }}>
+                  {detectionOn ? 'YOLO вкл' : 'только видео'}
+                </div>
                 <div className="k">action</div>
                 <div className="v">{status?.current_action ?? '—'}</div>
                 <div className="k">баро FC</div>
@@ -319,12 +334,21 @@ export function BetaflightSequencePage() {
               <button className="btn" disabled={!!busy} onClick={() => void run('unlock', unlockTarget)}>
                 Снять захват
               </button>
+              <button
+                className={`btn ${detectionOn ? '' : 'primary'}`}
+                disabled={!!busy}
+                title={detectionOn ? 'Выключить YOLO — только чистое видео' : 'Включить детекцию YOLO'}
+                onClick={() => void run('detection', toggleDetection)}
+              >
+                {detectionOn ? 'Детекция: ВКЛ' : 'Только видео'}
+              </button>
             </div>
             <div className="row" style={{ flexWrap: 'wrap', gap: 10 }}>
               <button
                 className="btn primary"
                 style={{ fontWeight: 900, minWidth: 200, fontSize: 15 }}
-                disabled={!!busy || status?.status === 'running'}
+                disabled={!!busy || status?.status === 'running' || !detectionOn}
+                title={!detectionOn ? 'Сначала включи детекцию' : undefined}
                 onClick={() => void run('capture', captureAndTrack)}
               >
                 Захват + полёт

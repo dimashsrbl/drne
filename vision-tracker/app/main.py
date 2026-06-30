@@ -54,6 +54,11 @@ class TargetState(BaseModel):
     camera_status: str = Field("", description="ok | no_device | no_frames | init")
     target_locked: bool = False
     lock_note: str = Field("", description="ok | none_in_center | lost_track | no_model | …")
+    detection_enabled: bool = True
+
+
+class DetectionToggle(BaseModel):
+    enabled: bool = Field(..., description="false — только видео без YOLO/трекинга")
 
 
 class MonitorStartRequest(BaseModel):
@@ -93,6 +98,7 @@ def _to_model(s: TrackerSnapshot) -> TargetState:
         camera_status=s.camera_status,
         target_locked=s.target_locked,
         lock_note=s.lock_note,
+        detection_enabled=s.detection_enabled,
     )
 
 
@@ -125,6 +131,19 @@ def unlock_target(request: Request) -> dict[str, str]:
     p: VisionPipeline = request.app.state.pipeline
     p.request_unlock_target()
     return {"ok": "true", "message": "unlocked"}
+
+
+@app.get("/detection")
+def get_detection(request: Request) -> dict[str, bool]:
+    p: VisionPipeline = request.app.state.pipeline
+    return {"enabled": p.is_detection_enabled()}
+
+
+@app.post("/detection")
+def set_detection(request: Request, body: DetectionToggle) -> dict[str, bool]:
+    p: VisionPipeline = request.app.state.pipeline
+    p.set_detection_enabled(body.enabled)
+    return {"enabled": p.is_detection_enabled()}
 
 
 @app.post("/monitor/start", response_model=MonitorStatus)
@@ -387,6 +406,8 @@ def meta() -> dict[str, str]:
         "snapshot": "/snapshot.jpg",
         "lock": "/lock",
         "unlock": "/unlock",
+        "detection_get": "/detection",
+        "detection_set": "/detection",
         "monitor_start": "/monitor/start",
         "monitor_stop": "/monitor/stop",
         "monitor_status": "/monitor/status",

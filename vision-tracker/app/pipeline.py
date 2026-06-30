@@ -912,6 +912,7 @@ class TrackerSnapshot:
     camera_status: str = ""  # ok | no_device | no_frames | …
     target_locked: bool = False
     lock_note: str = ""  # пусто | ok | none_in_center | no_model | …
+    detection_enabled: bool = True
 
 
 class VisionPipeline:
@@ -970,6 +971,7 @@ class VisionPipeline:
         self._cmd_lock = threading.Lock()
         self._pending_lock_center = False
         self._pending_unlock = False
+        self._detection_enabled = True
         self._follow_lock = False
         self._lock_cls_id: int | None = None
         self._lock_track_id: int | None = None  # ByteTrack id с YOLO track(), приоритет над классом
@@ -1079,6 +1081,20 @@ class VisionPipeline:
             self._pending_unlock = False
         return lc, u
 
+    def is_detection_enabled(self) -> bool:
+        with self._cmd_lock:
+            return self._detection_enabled
+
+    def set_detection_enabled(self, enabled: bool) -> None:
+        with self._cmd_lock:
+            self._detection_enabled = bool(enabled)
+        if not enabled:
+            self.request_unlock_target()
+            with self._lock:
+                self._cached_picked_rect = None
+                self._cached_cid_name = None
+        log.info("Detection %s", "enabled" if enabled else "disabled (preview only)")
+
     def snapshot(self) -> TrackerSnapshot:
         with self._lock:
             return TrackerSnapshot(
@@ -1096,6 +1112,7 @@ class VisionPipeline:
                 camera_status=self._snap.camera_status,
                 target_locked=self._snap.target_locked,
                 lock_note=self._snap.lock_note,
+                detection_enabled=self.is_detection_enabled(),
             )
 
     def get_preview_jpeg(self) -> bytes | None:
@@ -1183,7 +1200,17 @@ class VisionPipeline:
             kw["imgsz"] = self._yolo_imgsz
         return kw
 
+    def _push_raw_preview(self, frame: np.ndarray, w: int, h: int) -> None:
+        vis = frame
+        if vis.shape[1] > self._preview_max_w > 0:
+            sc = self._preview_max_w / float(vis.shape[1])
+            vis = cv2.resize(vis, (int(vis.shape[1] * sc), int(vis.shape[0] * sc)))
+        self._publish_preview_jpeg(self._encode_vis_jpeg(vis))
+
     def _push_fast_preview(self, frame: np.ndarray, w: int, h: int) -> None:
+        if not self.is_detection_enabled():
+            self._push_raw_preview(frame, w, h)
+            return
         vis = self._build_vis(
             frame.copy(),
             self._cached_picked_rect,
@@ -2246,6 +2273,31 @@ class VisionPipeline:
             self._cached_cid_name = None
             self._tracker_reset()
             self._vision_event("target_unlock", {})
+
+        if not self.is_detection_enabled():
+            now = time.perf_counter()
+            dt = max(1e-6, now - t_prev)
+            ema_fps = 0.9 * ema_fps + 0.1 * (1.0 / dt) if ema_fps > 0 else 1.0 / dt
+            with self._lock:
+                prev = self._snap
+                self._snap = TrackerSnapshot(
+                    track_id=None,
+                    cx=0.0,
+                    cy=0.0,
+                    confidence=0.0,
+                    lost=True,
+                    backend="preview",
+                    hint=None,
+                    fps=float(ema_fps),
+                    frame_w=w,
+                    frame_h=h,
+                    cls_name=None,
+                    camera_status="ok",
+                    target_locked=False,
+                    lock_note="",
+                    detection_enabled=False,
+                )
+            return now, ema_fps, was_lost, last_summary
 
         run_yolo = self._model is not None
         run_opencv_only = False
