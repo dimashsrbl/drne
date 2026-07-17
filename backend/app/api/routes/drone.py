@@ -68,9 +68,18 @@ def link_debug(seconds: float = 3.0) -> dict:
 
 
 @router.post("/arm", response_model=CommandResponse)
-def arm() -> CommandResponse:
+def arm(force: bool | None = None) -> CommandResponse:
+    """ARM. force=true — param2=21196 (стенд без GPS, без пропеллеров)."""
     try:
-        get_drone().arm()
+        drone = get_drone()
+        fn = getattr(drone, "arm")
+        if force is None:
+            fn()
+        else:
+            try:
+                fn(force=force)
+            except TypeError:
+                fn()
         return CommandResponse(ok=True)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e

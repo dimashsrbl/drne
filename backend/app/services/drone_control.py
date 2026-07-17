@@ -586,8 +586,26 @@ class DroneControlService:
         wait_s = float(timeout_s if timeout_s is not None else settings.ardupilot_arm_timeout_s)
         with self._lock:
             conn, t = self._require()
+            # STABILIZE проще для стенда, чем LAND/RTL.
+            try:
+                self._set_mode(conn, t, "STABILIZE")
+            except Exception:
+                pass
+        time.sleep(0.35)
+        with self._lock:
+            conn, t = self._require()
             self._arm_cmd(conn, t, True, force=use_force)
-        self._wait_armed_state(True, timeout_s=wait_s, used_force=use_force)
+        try:
+            self._wait_armed_state(True, timeout_s=wait_s * 0.55, used_force=use_force)
+            return
+        except RuntimeError:
+            if not use_force:
+                raise
+            # Повтор force-arm (иногда первый ACK теряется на UART).
+            with self._lock:
+                conn, t = self._require()
+                self._arm_cmd(conn, t, True, force=True)
+            self._wait_armed_state(True, timeout_s=wait_s * 0.55, used_force=True)
 
     def disarm(self, timeout_s: float | None = None) -> None:
         wait_s = float(timeout_s if timeout_s is not None else settings.ardupilot_arm_timeout_s)

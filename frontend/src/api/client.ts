@@ -6,7 +6,11 @@ export const api = {
   telemetry: () => apiFetch<TelemetryResponse>('/telemetry'),
   profile: () => apiFetch<DroneProfile>('/drone/profile'),
 
-  arm: () => apiFetch<CommandResponse>('/drone/arm', { method: 'POST' }),
+  arm: (force?: boolean) =>
+    apiFetch<CommandResponse>(
+      force == null ? '/drone/arm' : `/drone/arm?force=${force ? 'true' : 'false'}`,
+      { method: 'POST' },
+    ),
   disarm: () => apiFetch<CommandResponse>('/drone/disarm', { method: 'POST' }),
   land: () => apiFetch<CommandResponse>('/drone/land', { method: 'POST' }),
   returnHome: () => apiFetch<CommandResponse>('/drone/return-home', { method: 'POST' }),

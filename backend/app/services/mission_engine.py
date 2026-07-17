@@ -167,7 +167,14 @@ class MissionEngine:
 
                 if isinstance(a, ArmAction):
                     if isinstance(self._drone, DroneControlService):
-                        self._drone.arm(force=bool(a.force))
+                        # force=True явно; иначе None → settings.sitl_force_arm.
+                        # Стенд без GPS (только arm/wait/disarm/…) — всегда force.
+                        force: bool | None
+                        if a.force or not self._needs_gps(actions):
+                            force = True
+                        else:
+                            force = None
+                        self._drone.arm(force=force)
                     else:
                         self._drone.arm()
                     if self._profile() == "ardupilot":

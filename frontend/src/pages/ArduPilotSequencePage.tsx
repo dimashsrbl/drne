@@ -270,7 +270,14 @@ export function ArduPilotSequencePage() {
         <section className="card">
           <div className="cardTitle">Быстрые команды</div>
           <div className="row" style={{ flexWrap: 'wrap' }}>
-            <button className="btn" disabled={!!busy} onClick={() => void run('arm', api.arm)}>ARM</button>
+            <button
+              className="btn"
+              disabled={!!busy}
+              title={gpsReady ? 'Обычный ARM' : 'Без GPS — force-arm (только без пропеллеров)'}
+              onClick={() => void run('arm', () => api.arm(!gpsReady))}
+            >
+              {gpsReady ? 'ARM' : 'Force ARM'}
+            </button>
             <button className="btn" disabled={!!busy} onClick={() => void run('land-direct', api.land)}>LAND</button>
             <button className="btn" disabled={!!busy || !gpsReady} onClick={() => void run('rtl-direct', api.returnHome)}>RTL</button>
           </div>
