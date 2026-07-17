@@ -106,6 +106,15 @@ class DroneControlService:
             set_interval(1,  2.0)   # SYS_STATUS
             set_interval(33, 5.0)   # GLOBAL_POSITION_INT
             set_interval(24, 2.0)   # GPS_RAW_INT
+            set_interval(30, 2.0)   # ATTITUDE
+            # Fallback для портов, где SET_MESSAGE_INTERVAL игнорируется.
+            for stream_id, rate in (
+                (mavutil.mavlink.MAV_DATA_STREAM_EXTRA1, 4),
+                (mavutil.mavlink.MAV_DATA_STREAM_EXTRA2, 4),
+                (mavutil.mavlink.MAV_DATA_STREAM_EXTENDED_STATUS, 2),
+                (mavutil.mavlink.MAV_DATA_STREAM_POSITION, 5),
+            ):
+                conn.mav.request_data_stream_send(ts, tc, stream_id, rate, 1)
         except Exception:
             pass
 
@@ -180,6 +189,19 @@ class DroneControlService:
                         raise TimeoutError(
                             f"Нет heartbeat за {settings.mavlink_heartbeat_timeout_s}s ({conn_str})"
                         )
+
+                    # Игнорируем собственный GCS-heartbeat (source_system=255 / AUTOPILOT_INVALID).
+                    deadline = time.monotonic() + settings.mavlink_heartbeat_timeout_s
+                    while int(getattr(hb, "autopilot", -1)) == int(
+                        mavutil.mavlink.MAV_AUTOPILOT_INVALID
+                    ):
+                        if time.monotonic() >= deadline:
+                            raise TimeoutError(
+                                f"Нет heartbeat автопилота за {settings.mavlink_heartbeat_timeout_s}s ({conn_str})"
+                            )
+                        hb = conn.recv_match(type="HEARTBEAT", blocking=True, timeout=1.0)
+                        if hb is None:
+                            continue
 
                     target_system = (
                         settings.mavlink_target_system
@@ -303,6 +325,9 @@ class DroneControlService:
             return snap
 
         if mtype == "HEARTBEAT":
+            # Не принимать собственный GCS heartbeat как телеметрию борта.
+            if int(getattr(msg, "autopilot", -1)) == int(mavutil.mavlink.MAV_AUTOPILOT_INVALID):
+                return None
             base_mode = getattr(msg, "base_mode", 0)
             snap.armed = bool(base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
             custom_mode = getattr(msg, "custom_mode", None)

@@ -67,13 +67,28 @@ def mavlink_heartbeat(port: str, baud: int) -> bool:
         0,
         mavutil.mavlink.MAV_STATE_ACTIVE,
     )
-    hb = conn.wait_heartbeat(timeout=8)
+    deadline = time.monotonic() + 8.0
+    hb = None
+    while time.monotonic() < deadline:
+        msg = conn.recv_match(type="HEARTBEAT", blocking=True, timeout=1.0)
+        if msg is None:
+            continue
+        # Нужен heartbeat автопилота, не наш GCS (sys 255 / AUTOPILOT_INVALID).
+        if int(getattr(msg, "autopilot", -1)) == int(mavutil.mavlink.MAV_AUTOPILOT_INVALID):
+            continue
+        if int(msg.get_srcSystem()) == 255:
+            continue
+        hb = msg
+        break
     conn.close()
     if hb:
-        print(f"HEARTBEAT: OK  sys={hb.get_srcSystem()}")
+        print(
+            f"HEARTBEAT: OK  sys={hb.get_srcSystem()} "
+            f"autopilot={getattr(hb, 'autopilot', '?')}"
+        )
         return True
     print("HEARTBEAT: NO")
-    print("  -> На этом порту нет MAVLink (в INAV: Telemetry MAVLink на UART/USB)")
+    print("  -> Нет heartbeat автопилота (baud / TX-RX / SERIAL*_PROTOCOL / порт занят)")
     return False
 
 
@@ -108,13 +123,13 @@ def main() -> int:
         print("GPIO: .env -> DRONE_MAVLINK_CONNECTION=/dev/serial0")
         print("INAV UART4: MSP 115200 + Telemetry MAVLink")
 
-    if msp_ok and hb_ok:
-        print("\nRESULT: OK — можно start drone-mission и pi_motor_test")
+    if hb_ok:
+        print("\nRESULT: OK — MAVLink heartbeat есть (MSP для ArduPilot/Pixhawk не нужен)")
         return 0
     if msp_ok:
-        print("\nRESULT: MSP OK, MAVLink NO — arm через API не будет, добавь MAVLink в Ports")
+        print("\nRESULT: MSP OK, MAVLink NO — для Pixhawk нужен MAVLink на этом UART")
         return 2
-    print("\nRESULT: FAIL — нет связи, проверь USB/провода и закрой INAV CLI")
+    print("\nRESULT: FAIL — нет heartbeat, проверь baud/TX-RX/GND и SERIAL*_PROTOCOL")
     return 1
 
 
