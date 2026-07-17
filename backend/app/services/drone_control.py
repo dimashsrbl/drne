@@ -49,6 +49,20 @@ class DroneControlService:
         self._conn: mavutil.mavfile | None = None
         self._targets: MavlinkTargets | None = None
         self._gcs_hb_thread: threading.Thread | None = None
+        self._last_mode: str | None = None
+        self._last_armed: bool | None = None
+
+    def _apply_heartbeat(self, msg) -> tuple[str | None, bool]:
+        base_mode = getattr(msg, "base_mode", 0)
+        armed = bool(base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
+        mode_name: str | None = None
+        custom_mode = getattr(msg, "custom_mode", None)
+        if custom_mode is not None:
+            mode_by_num = {v: k for k, v in ARDU_MODES.items()}
+            mode_name = mode_by_num.get(int(custom_mode), f"MODE_{int(custom_mode)}")
+        self._last_mode = mode_name
+        self._last_armed = armed
+        return mode_name, armed
 
     # ------------------------------------------------------------------
     # GCS heartbeat — ArduPilot также мониторит GCS heartbeat;
@@ -229,6 +243,9 @@ class DroneControlService:
                         else int(hb.get_srcComponent())
                     )
 
+                    # Запомнить mode/armed из уже полученного heartbeat автопилота.
+                    self._apply_heartbeat(hb)
+
                     self._request_message_intervals(conn, target_system, target_component)
                     self._sitl_relax_preflight(conn, target_system, target_component)
 
@@ -306,8 +323,12 @@ class DroneControlService:
         now = time.monotonic()
 
         if mtype == "GLOBAL_POSITION_INT":
-            snap.lat = float(msg.lat) / 1e7
-            snap.lon = float(msg.lon) / 1e7
+            lat = float(msg.lat) / 1e7
+            lon = float(msg.lon) / 1e7
+            # Без GPS ArduPilot часто шлёт 0/0 — не засоряем UI нулями.
+            if abs(lat) > 1e-8 or abs(lon) > 1e-8:
+                snap.lat = lat
+                snap.lon = lon
             snap.alt = float(msg.relative_alt) / 1000.0
             vx = float(getattr(msg, "vx", 0)) / 100.0
             vy = float(getattr(msg, "vy", 0)) / 100.0
@@ -315,7 +336,7 @@ class DroneControlService:
             hdg = getattr(msg, "hdg", None)
             if hdg is not None and hdg != 65535:
                 snap.heading = float(hdg) / 100.0
-            snap.status = "flying"
+            snap.status = "connected"
             snap.updated_at_monotonic = now
             return snap
 
@@ -354,17 +375,15 @@ class DroneControlService:
             return snap
 
         if mtype == "HEARTBEAT":
-            # Не принимать собственный GCS heartbeat как телеметрию борта.
+            # Только свой GCS (sys=255) пропускаем. Остальное — борт.
+            src = int(msg.get_srcSystem())
+            if src == int(settings.mavlink_system_id):
+                return None
             if int(getattr(msg, "autopilot", -1)) == int(mavutil.mavlink.MAV_AUTOPILOT_INVALID):
                 return None
-            if int(msg.get_srcSystem()) == int(settings.mavlink_system_id):
-                return None
-            base_mode = getattr(msg, "base_mode", 0)
-            snap.armed = bool(base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
-            custom_mode = getattr(msg, "custom_mode", None)
-            if custom_mode is not None:
-                mode_by_num = {v: k for k, v in ARDU_MODES.items()}
-                snap.mode = mode_by_num.get(int(custom_mode))
+            mode_name, armed = self._apply_heartbeat(msg)
+            snap.armed = armed
+            snap.mode = mode_name
             snap.status = "idle"
             snap.updated_at_monotonic = now
             return snap
@@ -413,6 +432,19 @@ class DroneControlService:
                 merged = part
             else:
                 self._merge_telemetry(merged, part)
+
+        # Mode/armed всегда подмешиваем из последнего heartbeat (в т.ч. с connect).
+        if merged is None and (self._last_mode is not None or self._last_armed is not None):
+            merged = TelemetrySnapshot(source="ardupilot", status="connected")
+        if merged is not None:
+            if merged.mode is None and self._last_mode is not None:
+                merged.mode = self._last_mode
+            if merged.armed is None and self._last_armed is not None:
+                merged.armed = self._last_armed
+            if merged.source is None:
+                merged.source = "ardupilot"
+            if merged.updated_at_monotonic is None:
+                merged.updated_at_monotonic = time.monotonic()
         return merged
 
     def link_debug(self, seconds: float = 3.0) -> dict:
@@ -426,6 +458,7 @@ class DroneControlService:
                 continue
             name = msg.get_type()
             counts[name] = counts.get(name, 0) + 1
+        snap = self.poll_telemetry(wait_s=0.5)
         with self._lock:
             targets = self._targets
         return {
@@ -433,7 +466,22 @@ class DroneControlService:
             "baud": settings.mavlink_baud,
             "target_system": targets.target_system if targets else None,
             "target_component": targets.target_component if targets else None,
+            "last_mode": self._last_mode,
+            "last_armed": self._last_armed,
             "message_counts": counts,
+            "telemetry_sample": None if snap is None else {
+                "mode": snap.mode,
+                "armed": snap.armed,
+                "alt": snap.alt,
+                "heading": snap.heading,
+                "battery": snap.battery,
+                "gps_fix": snap.gps_fix,
+                "gps_sats": snap.gps_sats,
+                "lat": snap.lat,
+                "lon": snap.lon,
+                "status": snap.status,
+                "source": snap.source,
+            },
             "seconds": seconds,
         }
 
