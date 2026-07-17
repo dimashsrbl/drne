@@ -15,7 +15,8 @@ def route(body: RouteRequest) -> MissionStatusResponse:
     engine = get_mission_engine()
     try:
         actions = _nav.build_route_mission(body)
-        engine.start(actions)
+        prefer_auto = len(body.waypoints) >= 1
+        engine.start(actions, prefer_auto=prefer_auto)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 

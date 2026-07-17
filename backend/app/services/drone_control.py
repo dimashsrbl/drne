@@ -8,6 +8,13 @@ import math
 from pymavlink import mavutil
 
 from app.core.config import settings
+from app.schemas.mission import MissionAction
+from app.services.ardupilot_mission import (
+    ArduMissionPlan,
+    build_mission_plan,
+    start_auto_mission,
+    upload_mission_plan,
+)
 from app.services.drone_types import DroneCapabilities, SafetyGate, TelemetrySnapshot
 
 # ArduCopter режимы (custom_mode number).
@@ -98,6 +105,7 @@ class DroneControlService:
             set_interval(0,  1.0)   # HEARTBEAT
             set_interval(1,  2.0)   # SYS_STATUS
             set_interval(33, 5.0)   # GLOBAL_POSITION_INT
+            set_interval(24, 2.0)   # GPS_RAW_INT
         except Exception:
             pass
 
@@ -285,6 +293,15 @@ class DroneControlService:
             snap.updated_at_monotonic = now
             return snap
 
+        if mtype == "GPS_RAW_INT":
+            fix = int(getattr(msg, "fix_type", 0))
+            sats = int(getattr(msg, "satellites_visible", 0))
+            snap.gps_fix = fix
+            snap.gps_sats = sats if sats > 0 else None
+            snap.status = "connected"
+            snap.updated_at_monotonic = now
+            return snap
+
         if mtype == "HEARTBEAT":
             base_mode = getattr(msg, "base_mode", 0)
             snap.armed = bool(base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
@@ -299,6 +316,16 @@ class DroneControlService:
         return None
 
     def get_capabilities(self) -> DroneCapabilities:
+        mode = (settings.ardupilot_mission_mode or "guided").strip().lower()
+        warnings: tuple[str, ...] = (
+            "Миссии: GUIDED (пошагово) или AUTO (загрузка waypoints на FC, см. DRONE_ARDUPILOT_MISSION_MODE).",
+            "Для goto / маршрута нужен GPS 3D (≥6 спутников).",
+            "На реальном FC: DRONE_SITL_FORCE_ARM=false, ARM с пульта или шаг arm в миссии.",
+        )
+        if mode == "auto":
+            warnings = warnings + (
+                "Режим auto: wait-паузы в конструкторе не выполняются на FC — используй guided.",
+            )
         return DroneCapabilities(
             profile="ardupilot",
             label="ArduPilot / MAVLink",
@@ -307,10 +334,11 @@ class DroneControlService:
             supports_direct_commands=True,
             supports_video=bool(settings.video_stream_url),
             video_url=settings.video_stream_url,
-            warnings=(),
+            warnings=warnings,
             safety_gates=(
                 SafetyGate("no_props", "Первый тест команд только без пропеллеров", "warning"),
                 SafetyGate("manual_first", "Первый реальный вылет только в ручном режиме", "warning"),
+                SafetyGate("gps_fix", "Для takeoff/goto нужен GPS-фикс", "error"),
             ),
         )
 
@@ -352,14 +380,14 @@ class DroneControlService:
 
     def takeoff(self, altitude_m: float, no_gps: bool = False) -> None:
         """
-        ArduCopter: переключаемся в GUIDED, ARM, затем MAV_CMD_NAV_TAKEOFF.
-        altitude_m — высота над точкой взлёта (AGL), не AMSL.
+        ArduCopter: GUIDED + MAV_CMD_NAV_TAKEOFF.
+        altitude_m — AGL. no_gps игнорируется (нужен GPS для GUIDED).
         """
-        _ = no_gps  # ArduPilot: режим GUIDED, флаг не используется
+        if no_gps:
+            pass  # ArduPilot GUIDED требует GPS; флаг оставлен для совместимости API.
         alt = float(max(1.0, min(altitude_m, 120.0)))
         with self._lock:
             conn, t = self._require()
-            # GUIDED — единственный режим, в котором работает программный takeoff
             self._set_mode(conn, t, "GUIDED")
             time.sleep(0.3)
             if settings.sitl_force_arm:
@@ -459,3 +487,22 @@ class DroneControlService:
         with self._lock:
             conn, t = self._require()
             self._set_mode(conn, t, mode_name)
+
+    def upload_and_start_auto_mission(
+        self,
+        actions: list[MissionAction],
+        *,
+        arm_first: bool = True,
+    ) -> ArduMissionPlan:
+        """Загрузить миссию на FC и запустить AUTO (waypoints / takeoff / land)."""
+        plan = build_mission_plan(actions)
+        with self._lock:
+            conn, t = self._require()
+            upload_mission_plan(conn, t.target_system, t.target_component, plan)
+            start_auto_mission(
+                conn,
+                t.target_system,
+                t.target_component,
+                arm_first=arm_first,
+            )
+        return plan

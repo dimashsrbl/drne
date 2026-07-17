@@ -148,8 +148,16 @@ class Settings(BaseSettings):
     # sitl_relax_preflight=True отключает ARMING_CHECK в SITL.
     sitl_relax_preflight: bool = True
 
-    # param2=21196 — force arm для ArduPilot. INAV его не поддерживает.
+    # param2=21196 — force arm для ArduPilot. На реальном FC держи false.
     sitl_force_arm: bool = True
+
+    # guided — по шагам (GUIDED + goto). auto — загрузка MISSION_ITEM_INT + режим AUTO.
+    ardupilot_mission_mode: str = "guided"
+    ardupilot_min_gps_sats: int = 6
+    ardupilot_goto_tol_m: float = 3.0
+    ardupilot_goto_alt_tol_m: float = 2.0
+    ardupilot_arm_settle_s: float = 0.6
+    ardupilot_auto_route_min_waypoints: int = 1
 
     # ---- Unity симулятор (unity_sim) ---------------------------------
     # Unity слушает команды на udp://<unity_cmd_host>:<unity_cmd_port>

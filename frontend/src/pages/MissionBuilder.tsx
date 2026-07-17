@@ -72,6 +72,17 @@ export function MissionBuilder() {
           </div>
         )}
 
+        {profile?.profile === 'ardupilot' && (
+          <div className="alert" style={{ marginBottom: 12, borderColor: 'rgba(59,130,246,0.45)', background: 'rgba(59,130,246,0.08)' }}>
+            <div className="alertTitle" style={{ color: '#93c5fd' }}>ArduPilot</div>
+            <div className="alertBody">
+              Миссии: <b>arm → takeoff → goto → land</b> в режиме GUIDED. Маршрут с карты (<code>/nav/route</code>)
+              загружает waypoints на FC (AUTO). Нужен GPS 3D. На Pi: <code>DRONE_BACKEND_PROFILE=ardupilot</code>,
+              <code> DRONE_SITL_FORCE_ARM=false</code>.
+            </div>
+          </div>
+        )}
+
         {profile?.profile === 'inav' && (
           <div className="alert" style={{ marginBottom: 12, borderColor: 'rgba(234,179,8,0.5)', background: 'rgba(234,179,8,0.08)' }}>
             <div className="alertTitle" style={{ color: '#fbbf24' }}>INAV: GPS и тест без GPS</div>
