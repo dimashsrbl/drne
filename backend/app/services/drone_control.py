@@ -107,14 +107,29 @@ class DroneControlService:
             set_interval(33, 5.0)   # GLOBAL_POSITION_INT
             set_interval(24, 2.0)   # GPS_RAW_INT
             set_interval(30, 2.0)   # ATTITUDE
+            set_interval(74, 2.0)   # VFR_HUD
             # Fallback для портов, где SET_MESSAGE_INTERVAL игнорируется.
             for stream_id, rate in (
                 (mavutil.mavlink.MAV_DATA_STREAM_EXTRA1, 4),
                 (mavutil.mavlink.MAV_DATA_STREAM_EXTRA2, 4),
                 (mavutil.mavlink.MAV_DATA_STREAM_EXTENDED_STATUS, 2),
                 (mavutil.mavlink.MAV_DATA_STREAM_POSITION, 5),
+                (mavutil.mavlink.MAV_DATA_STREAM_RAW_SENSORS, 2),
             ):
                 conn.mav.request_data_stream_send(ts, tc, stream_id, rate, 1)
+            # Явно поднять SR2_* (TELEM2), если GCS сидит на SERIAL2.
+            for name, val in (
+                ("SR2_EXTRA1", 4.0),
+                ("SR2_EXTRA2", 4.0),
+                ("SR2_EXTRA3", 2.0),
+                ("SR2_EXT_STAT", 2.0),
+                ("SR2_POSITION", 4.0),
+                ("SR2_RAW_SENS", 2.0),
+            ):
+                pid = name.encode("ascii").ljust(16, b"\x00")[:16]
+                conn.mav.param_set_send(
+                    ts, tc, pid, val, mavutil.mavlink.MAV_PARAM_TYPE_REAL32
+                )
         except Exception:
             pass
 
@@ -284,11 +299,7 @@ class DroneControlService:
             time.sleep(0.02)
         return None
 
-    def poll_telemetry(self, wait_s: float = 1.0) -> TelemetrySnapshot | None:
-        msg = self.poll_telemetry_message(wait_s=wait_s)
-        if msg is None:
-            return None
-
+    def _parse_telemetry_message(self, msg) -> TelemetrySnapshot | None:
         snap = TelemetrySnapshot(source="ardupilot")
         mtype = msg.get_type()
         now = time.monotonic()
@@ -311,6 +322,14 @@ class DroneControlService:
             br = getattr(msg, "battery_remaining", -1)
             if br is not None and br >= 0:
                 snap.battery = float(br)
+            else:
+                mv = getattr(msg, "voltage_battery", None)
+                if mv is not None and int(mv) > 5000:
+                    # Грубый % для 6S, если FC не отдаёт battery_remaining.
+                    volts = float(mv) / 1000.0
+                    cell = volts / 6.0
+                    snap.battery = max(0.0, min(100.0, (cell - 3.5) / 0.7 * 100.0))
+                    snap.note = f"Vbat={volts:.1f}V"
             snap.status = "connected"
             snap.updated_at_monotonic = now
             return snap
@@ -319,7 +338,16 @@ class DroneControlService:
             fix = int(getattr(msg, "fix_type", 0))
             sats = int(getattr(msg, "satellites_visible", 0))
             snap.gps_fix = fix
-            snap.gps_sats = sats if sats > 0 else None
+            snap.gps_sats = sats if sats >= 0 else None
+            snap.status = "connected"
+            snap.updated_at_monotonic = now
+            return snap
+
+        if mtype == "ATTITUDE":
+            yaw = getattr(msg, "yaw", None)
+            if yaw is not None:
+                deg = math.degrees(float(yaw)) % 360.0
+                snap.heading = deg
             snap.status = "connected"
             snap.updated_at_monotonic = now
             return snap
@@ -327,6 +355,8 @@ class DroneControlService:
         if mtype == "HEARTBEAT":
             # Не принимать собственный GCS heartbeat как телеметрию борта.
             if int(getattr(msg, "autopilot", -1)) == int(mavutil.mavlink.MAV_AUTOPILOT_INVALID):
+                return None
+            if int(msg.get_srcSystem()) == int(settings.mavlink_system_id):
                 return None
             base_mode = getattr(msg, "base_mode", 0)
             snap.armed = bool(base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
@@ -338,7 +368,51 @@ class DroneControlService:
             snap.updated_at_monotonic = now
             return snap
 
+        if mtype == "VFR_HUD":
+            if getattr(msg, "alt", None) is not None:
+                snap.alt = float(msg.alt)
+            if getattr(msg, "groundspeed", None) is not None:
+                snap.speed = float(msg.groundspeed)
+            if getattr(msg, "heading", None) is not None:
+                snap.heading = float(msg.heading)
+            snap.status = "connected"
+            snap.updated_at_monotonic = now
+            return snap
+
         return None
+
+    @staticmethod
+    def _merge_telemetry(dst: TelemetrySnapshot, src: TelemetrySnapshot) -> TelemetrySnapshot:
+        for field_name, value in src.__dict__.items():
+            if value is None:
+                continue
+            if field_name == "status" and value in ("connected", "idle") and dst.status == "flying":
+                continue
+            setattr(dst, field_name, value)
+        return dst
+
+    def poll_telemetry(self, wait_s: float = 1.0) -> TelemetrySnapshot | None:
+        """
+        Слить несколько MAVLink-сообщений за wait_s и собрать один snapshot.
+        Иначе первый STATUSTEXT/ACK обнуляет цикл и mode/gps остаются пустыми.
+        """
+        deadline = time.monotonic() + wait_s
+        merged: TelemetrySnapshot | None = None
+        while time.monotonic() < deadline:
+            remaining = max(0.0, deadline - time.monotonic())
+            msg = self.poll_telemetry_message(wait_s=min(0.25, remaining))
+            if msg is None:
+                if merged is not None:
+                    break
+                continue
+            part = self._parse_telemetry_message(msg)
+            if part is None:
+                continue
+            if merged is None:
+                merged = part
+            else:
+                self._merge_telemetry(merged, part)
+        return merged
 
     def get_capabilities(self) -> DroneCapabilities:
         mode = (settings.ardupilot_mission_mode or "guided").strip().lower()
