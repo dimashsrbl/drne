@@ -54,6 +54,19 @@ def profile() -> DroneProfileResponse:
     return _profile_response()
 
 
+@router.get("/link-debug")
+def link_debug(seconds: float = 3.0) -> dict:
+    """Диагностика MAVLink: baud + счётчики типов сообщений за N секунд."""
+    drone = get_drone()
+    fn = getattr(drone, "link_debug", None)
+    if fn is None:
+        raise HTTPException(status_code=409, detail="link-debug доступен только для ArduPilot профиля")
+    try:
+        return fn(seconds=max(0.5, min(float(seconds), 10.0)))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
 @router.post("/arm", response_model=CommandResponse)
 def arm() -> CommandResponse:
     try:

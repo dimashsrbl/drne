@@ -65,10 +65,10 @@ class DroneControlService:
                 while True:
                     time.sleep(1.0)
                     try:
+                        # pyserial/pymavlink не thread-safe: send только под lock.
                         with self._lock:
-                            c = self._conn
-                        if c is not None:
-                            self._kick_gcs(c)
+                            if self._conn is not None:
+                                self._kick_gcs(self._conn)
                     except Exception:
                         pass
 
@@ -286,16 +286,17 @@ class DroneControlService:
 
         deadline = time.monotonic() + wait_s
         while time.monotonic() < deadline:
-            with self._lock:
-                conn = self._conn
-            if conn is None:
-                break
             try:
-                m = conn.recv_match(blocking=False, timeout=0)
+                with self._lock:
+                    conn = self._conn
+                    if conn is None:
+                        return None
+                    # recv тоже только под lock — иначе гонка с GCS heartbeat.
+                    m = conn.recv_match(blocking=False, timeout=0)
                 if m is not None and m.get_type() != "BAD_DATA":
                     return m
             except Exception:
-                pass
+                return None
             time.sleep(0.02)
         return None
 
@@ -413,6 +414,28 @@ class DroneControlService:
             else:
                 self._merge_telemetry(merged, part)
         return merged
+
+    def link_debug(self, seconds: float = 3.0) -> dict:
+        """Диагностика: baud, target, какие типы сообщений приходят."""
+        self.connect()
+        counts: dict[str, int] = {}
+        deadline = time.monotonic() + max(0.5, seconds)
+        while time.monotonic() < deadline:
+            msg = self.poll_telemetry_message(wait_s=0.2)
+            if msg is None:
+                continue
+            name = msg.get_type()
+            counts[name] = counts.get(name, 0) + 1
+        with self._lock:
+            targets = self._targets
+        return {
+            "connection": settings.mavlink_connection,
+            "baud": settings.mavlink_baud,
+            "target_system": targets.target_system if targets else None,
+            "target_component": targets.target_component if targets else None,
+            "message_counts": counts,
+            "seconds": seconds,
+        }
 
     def get_capabilities(self) -> DroneCapabilities:
         mode = (settings.ardupilot_mission_mode or "guided").strip().lower()
