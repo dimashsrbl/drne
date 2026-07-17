@@ -2,7 +2,7 @@ import type { MissionStatus } from './types'
 import { apiFetch } from './shared'
 
 export type MissionAction =
-  | { action: 'arm' }
+  | { action: 'arm'; force?: boolean }
   | { action: 'disarm' }
   | { action: 'takeoff'; alt: number; no_gps?: boolean }
   | { action: 'land' }

@@ -11,6 +11,8 @@ class ActionBase(BaseModel):
 
 class ArmAction(ActionBase):
     action: Literal["arm"]
+    # force=true → MAVLink param2=21196 (игнор prearm). Только стенд без пропеллеров.
+    force: bool = Field(default=False)
 
 
 class DisarmAction(ActionBase):

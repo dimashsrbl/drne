@@ -24,7 +24,7 @@ const flightPreset: MissionAction[] = [
 ]
 
 const benchPreset: MissionAction[] = [
-  { action: 'arm' },
+  { action: 'arm', force: true },
   { action: 'wait', seconds: 3 },
   { action: 'disarm' },
 ]
@@ -121,8 +121,8 @@ export function ArduPilotSequencePage() {
           <div className="alert" style={{ marginBottom: 12, borderColor: 'rgba(251,191,36,0.55)' }}>
             <div className="alertTitle" style={{ color: '#fbbf24' }}>Нет GPS 3D</div>
             <div className="alertBody">
-              Для этой миссии нужно минимум 6 спутников и fix 3D. Для проверки без GPS выбери «Bench ARM → DISARM»,
-              обязательно без пропеллеров.
+              Для этой миссии нужно минимум 6 спутников и fix 3D. Для проверки без GPS выбери «Bench ARM → DISARM»
+              (force-arm, только без пропеллеров).
             </div>
           </div>
         ) : null}

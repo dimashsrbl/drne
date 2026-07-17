@@ -166,12 +166,17 @@ class MissionEngine:
                 self._set_step(i, a.action)
 
                 if isinstance(a, ArmAction):
-                    self._drone.arm()
+                    if isinstance(self._drone, DroneControlService):
+                        self._drone.arm(force=bool(a.force))
+                    else:
+                        self._drone.arm()
                     if self._profile() == "ardupilot":
                         self._sleep(settings.ardupilot_arm_settle_s)
 
                 elif isinstance(a, DisarmAction):
                     self._drone.disarm()
+                    if self._profile() == "ardupilot":
+                        self._sleep(0.3)
 
                 elif isinstance(a, TakeoffAction):
                     if a.no_gps and self._profile() == "ardupilot":

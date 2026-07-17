@@ -157,6 +157,8 @@ class Settings(BaseSettings):
     ardupilot_goto_tol_m: float = 3.0
     ardupilot_goto_alt_tol_m: float = 2.0
     ardupilot_arm_settle_s: float = 0.6
+    # Сколько ждать armed=true после ARM (иначе миссия врёт «completed»).
+    ardupilot_arm_timeout_s: float = 8.0
     ardupilot_auto_route_min_waypoints: int = 1
 
     # ---- Unity симулятор (unity_sim) ---------------------------------
