@@ -67,6 +67,19 @@ def link_debug(seconds: float = 3.0) -> dict:
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
+@router.post("/arm-debug")
+def arm_debug(force: bool = True, seconds: float = 8.0) -> dict:
+    """Диагностика ARM: STATUSTEXT / ACK / armed. Только стенд, без пропеллеров."""
+    drone = get_drone()
+    fn = getattr(drone, "arm_debug", None)
+    if fn is None:
+        raise HTTPException(status_code=409, detail="arm-debug доступен только для ArduPilot")
+    try:
+        return fn(force=force, seconds=max(2.0, min(float(seconds), 20.0)))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
 @router.post("/arm", response_model=CommandResponse)
 def arm(force: bool | None = None) -> CommandResponse:
     """ARM. force=true — param2=21196 (стенд без GPS, без пропеллеров)."""

@@ -51,9 +51,13 @@ class DroneControlService:
         self._gcs_hb_thread: threading.Thread | None = None
         self._last_mode: str | None = None
         self._last_armed: bool | None = None
+        self._recent_texts: list[str] = []
+        self._last_arm_ack: int | None = None
+        self._last_base_mode: int | None = None
 
     def _apply_heartbeat(self, msg) -> tuple[str | None, bool]:
         base_mode = getattr(msg, "base_mode", 0)
+        self._last_base_mode = int(base_mode)
         armed = bool(base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
         mode_name: str | None = None
         custom_mode = getattr(msg, "custom_mode", None)
@@ -63,6 +67,29 @@ class DroneControlService:
         self._last_mode = mode_name
         self._last_armed = armed
         return mode_name, armed
+
+    def _note_text(self, text: str) -> None:
+        text = text.strip()
+        if not text:
+            return
+        if text not in self._recent_texts:
+            self._recent_texts.append(text)
+            if len(self._recent_texts) > 12:
+                self._recent_texts = self._recent_texts[-12:]
+
+    def _ingest_side_message(self, msg) -> bool:
+        """STATUSTEXT / COMMAND_ACK — сохранить и вернуть True если обработано."""
+        mtype = msg.get_type()
+        if mtype == "STATUSTEXT":
+            self._note_text(str(getattr(msg, "text", "") or ""))
+            return True
+        if mtype == "COMMAND_ACK":
+            cmd = int(getattr(msg, "command", 0))
+            if cmd == int(mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM):
+                self._last_arm_ack = int(getattr(msg, "result", -1))
+                self._note_text(f"ARM_ACK result={self._last_arm_ack}")
+            return True
+        return False
 
     # ------------------------------------------------------------------
     # GCS heartbeat — ArduPilot также мониторит GCS heartbeat;
@@ -156,9 +183,12 @@ class DroneControlService:
             return
         try:
             params: list[tuple[str, float]] = [
-                ("ARMING_CHECK", 0.0),   # отключает все проверки перед ARM
-                ("FS_THR_ENABLE", 0.0),  # throttle failsafe — не нужен в SITL
-                ("FS_GCS_ENABLE", 0.0),  # GCS failsafe — не нужен в SITL
+                ("ARMING_CHECK", 0.0),
+                ("FS_THR_ENABLE", 0.0),
+                ("FS_GCS_ENABLE", 0.0),
+                ("BRD_SAFETY_DEFLT", 0.0),
+                # Без пульта: игнор RC receiver (bit0=1). Иначе RC_OPTIONS=32 ждёт idle throttle.
+                ("RC_OPTIONS", 1.0),
             ]
             for name, val in params:
                 pid = name.encode("ascii").ljust(16, b"\x00")[:16]
@@ -185,14 +215,45 @@ class DroneControlService:
         force: bool | None = None,
     ) -> None:
         p1 = 1.0 if arm else 0.0
-        # param2=21196 — force arm (игнор prearm). На реальном FC только для стенда без пропов.
         use_force = settings.sitl_force_arm if force is None else bool(force)
         p2 = 21196.0 if (use_force and arm) else 0.0
-        conn.mav.command_long_send(
-            t.target_system, t.target_component,
-            mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM,
-            0, p1, p2, 0, 0, 0, 0, 0,
-        )
+        # Шлём и в autopilot component, и broadcast (comp=0) — Pixhawk иногда глотает один адрес.
+        for comp in {int(t.target_component), 0, 1}:
+            conn.mav.command_long_send(
+                t.target_system, comp,
+                mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM,
+                0, p1, p2, 0, 0, 0, 0, 0,
+            )
+
+    def _send_rc_idle(self, conn: mavutil.mavfile, t: MavlinkTargets) -> None:
+        """RC override: throttle min, стики центр — для стенда без пульта."""
+        try:
+            conn.mav.rc_channels_override_send(
+                t.target_system,
+                t.target_component,
+                1500,  # roll
+                1500,  # pitch
+                1000,  # throttle idle
+                1500,  # yaw
+                0, 0, 0, 0,
+            )
+        except Exception:
+            pass
+
+    def _drain_locked(self, conn: mavutil.mavfile, seconds: float) -> None:
+        """Читать UART под уже взятым lock; обновлять armed/тексты."""
+        deadline = time.monotonic() + max(0.05, seconds)
+        while time.monotonic() < deadline:
+            try:
+                msg = conn.recv_match(blocking=False, timeout=0)
+            except Exception:
+                break
+            if msg is None or msg.get_type() == "BAD_DATA":
+                time.sleep(0.02)
+                continue
+            if self._ingest_side_message(msg):
+                continue
+            self._parse_telemetry_message(msg)
 
     def _wait_armed_state(
         self,
@@ -200,48 +261,64 @@ class DroneControlService:
         *,
         timeout_s: float,
         used_force: bool,
+        hold_lock: bool = False,
     ) -> None:
         """Ждём HEARTBEAT с нужным armed; собираем STATUSTEXT при отказе."""
         if self._last_armed is want:
             return
-        notes: list[str] = []
         deadline = time.monotonic() + max(0.5, timeout_s)
-        while time.monotonic() < deadline:
-            msg = self.poll_telemetry_message(wait_s=0.35)
-            if msg is None:
+
+        def _loop(conn: mavutil.mavfile | None) -> None:
+            while time.monotonic() < deadline:
                 if self._last_armed is want:
                     return
-                continue
-            mtype = msg.get_type()
-            if mtype == "STATUSTEXT":
-                text = str(getattr(msg, "text", "") or "").strip()
-                if text and text not in notes:
-                    notes.append(text)
-                continue
-            if mtype == "COMMAND_ACK":
-                cmd = int(getattr(msg, "command", 0))
-                if cmd == int(mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM):
-                    result = int(getattr(msg, "result", -1))
-                    if result != int(mavutil.mavlink.MAV_RESULT_ACCEPTED):
-                        notes.append(f"COMMAND_ACK result={result}")
-                        break
-                continue
-            part = self._parse_telemetry_message(msg)
-            if part is not None and part.armed is want:
-                return
+                if (
+                    want
+                    and self._last_arm_ack is not None
+                    and self._last_arm_ack != int(mavutil.mavlink.MAV_RESULT_ACCEPTED)
+                    and self._last_arm_ack != int(mavutil.mavlink.MAV_RESULT_IN_PROGRESS)
+                ):
+                    break
+                if hold_lock and conn is not None:
+                    self._drain_locked(conn, 0.25)
+                else:
+                    msg = self.poll_telemetry_message(wait_s=0.35)
+                    if msg is None:
+                        continue
+                    if self._ingest_side_message(msg):
+                        continue
+                    self._parse_telemetry_message(msg)
+
+        if hold_lock:
+            with self._lock:
+                conn, _t = self._require()
+                _loop(conn)
+                if self._last_armed is want:
+                    return
+        else:
+            _loop(None)
             if self._last_armed is want:
                 return
 
         hint = (
             "Для стенда без GPS: Bench ARM (force) или DRONE_SITL_FORCE_ARM=true / ARMING_CHECK=0 в MP."
             if want and not used_force
-            else "Проверь safety switch, батарею, режим (не LAND), пропеллеры сняты."
+            else (
+                "Смотри текст FC выше. Частые причины: safety switch (нажми или BRD_SAFETY_DEFLT=0 + reboot), "
+                "гироскопы (перезапуск FC неподвижно), нет ACK (проверь TELEM2). "
+                "В Mission Planner по USB: Action → Arm — там будет PreArm: ..."
+            )
             if want
             else "FC не снял ARM — попробуй DISARM ещё раз или перезагрузку FC."
         )
-        detail = f" FC: {'; '.join(notes[-3:])}." if notes else ""
+        texts = list(self._recent_texts[-5:])
+        detail = f" FC: {'; '.join(texts)}." if texts else " (нет STATUSTEXT/ACK от FC — команда могла не дойти)."
+        extra = (
+            f" mode={self._last_mode} base_mode={self._last_base_mode} "
+            f"arm_ack={self._last_arm_ack}."
+        )
         state = "ARMED" if want else "DISARMED"
-        raise RuntimeError(f"Timeout: Pixhawk не стал {state}.{detail} {hint}")
+        raise RuntimeError(f"Timeout: Pixhawk не стал {state}.{detail}{extra} {hint}")
 
     # ------------------------------------------------------------------
     # Подключение
@@ -368,6 +445,7 @@ class DroneControlService:
                     # recv тоже только под lock — иначе гонка с GCS heartbeat.
                     m = conn.recv_match(blocking=False, timeout=0)
                 if m is not None and m.get_type() != "BAD_DATA":
+                    self._ingest_side_message(m)
                     return m
             except Exception:
                 return None
@@ -584,35 +662,68 @@ class DroneControlService:
     def arm(self, force: bool | None = None, timeout_s: float | None = None) -> None:
         use_force = settings.sitl_force_arm if force is None else bool(force)
         wait_s = float(timeout_s if timeout_s is not None else settings.ardupilot_arm_timeout_s)
+        self._recent_texts.clear()
+        self._last_arm_ack = None
+
+        # Весь ARM под одним lock — иначе telemetry-поток съедает STATUSTEXT/ACK.
         with self._lock:
             conn, t = self._require()
-            # STABILIZE проще для стенда, чем LAND/RTL.
+            if settings.sitl_relax_preflight:
+                self._sitl_relax_preflight(conn, t.target_system, t.target_component)
             try:
                 self._set_mode(conn, t, "STABILIZE")
             except Exception:
                 pass
-        time.sleep(0.35)
-        with self._lock:
-            conn, t = self._require()
+            for _ in range(5):
+                self._send_rc_idle(conn, t)
+                self._drain_locked(conn, 0.05)
             self._arm_cmd(conn, t, True, force=use_force)
-        try:
-            self._wait_armed_state(True, timeout_s=wait_s * 0.55, used_force=use_force)
-            return
-        except RuntimeError:
-            if not use_force:
-                raise
-            # Повтор force-arm (иногда первый ACK теряется на UART).
-            with self._lock:
-                conn, t = self._require()
+            self._drain_locked(conn, min(wait_s, 6.0))
+            if self._last_armed is True:
+                return
+            if use_force:
                 self._arm_cmd(conn, t, True, force=True)
-            self._wait_armed_state(True, timeout_s=wait_s * 0.55, used_force=True)
+                self._drain_locked(conn, min(wait_s, 5.0))
+                if self._last_armed is True:
+                    return
+
+        self._wait_armed_state(True, timeout_s=1.0, used_force=use_force, hold_lock=True)
 
     def disarm(self, timeout_s: float | None = None) -> None:
         wait_s = float(timeout_s if timeout_s is not None else settings.ardupilot_arm_timeout_s)
+        self._recent_texts.clear()
+        self._last_arm_ack = None
         with self._lock:
             conn, t = self._require()
-            self._arm_cmd(conn, t, False, force=False)
-        self._wait_armed_state(False, timeout_s=wait_s, used_force=False)
+            self._arm_cmd(conn, t, False, force=True)
+            self._drain_locked(conn, min(wait_s, 5.0))
+            if self._last_armed is False:
+                return
+        self._wait_armed_state(False, timeout_s=1.0, used_force=False, hold_lock=True)
+
+    def arm_debug(self, force: bool = True, seconds: float = 8.0) -> dict:
+        """Диагностика ARM: тексты FC, ACK, mode, armed."""
+        err: str | None = None
+        try:
+            self.arm(force=force, timeout_s=seconds)
+        except Exception as e:
+            err = str(e)
+        with self._lock:
+            targets = self._targets
+        return {
+            "ok": err is None and self._last_armed is True,
+            "error": err,
+            "armed": self._last_armed,
+            "mode": self._last_mode,
+            "base_mode": self._last_base_mode,
+            "arm_ack": self._last_arm_ack,
+            "statustext": list(self._recent_texts),
+            "target_system": targets.target_system if targets else None,
+            "target_component": targets.target_component if targets else None,
+            "force": force,
+            "sitl_force_arm": settings.sitl_force_arm,
+            "sitl_relax_preflight": settings.sitl_relax_preflight,
+        }
 
     def _set_mode(self, conn: mavutil.mavfile, t: MavlinkTargets, mode_name: str) -> None:
         """Переключение режима ArduCopter через MAV_CMD_DO_SET_MODE."""
