@@ -40,7 +40,7 @@ export type DroneProfile = {
 }
 
 export type MissionStatus = {
-  status: 'idle' | 'running' | 'completed' | 'error'
+  status: 'idle' | 'running' | 'completed' | 'stopped' | 'error'
   current_step?: number | null
   total_steps?: number | null
   current_action?: string | null

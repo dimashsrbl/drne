@@ -24,11 +24,15 @@ from app.services.telemetry import TelemetryService
 
 @dataclass
 class MissionState:
-    status: str = "idle"  # idle|running|completed|error
+    status: str = "idle"  # idle|running|completed|stopped|error
     current_step: int | None = None
     total_steps: int | None = None
     current_action: str | None = None
     error: str | None = None
+
+
+class MissionStopped(Exception):
+    pass
 
 
 def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -55,6 +59,7 @@ class MissionEngine:
         self._lock = threading.RLock()
         self._state = MissionState()
         self._thread: threading.Thread | None = None
+        self._stop_event = threading.Event()
 
     def get_state(self) -> MissionState:
         with self._lock:
@@ -69,6 +74,7 @@ class MissionEngine:
                 )
             if self._state.status == "running":
                 raise RuntimeError("Миссия уже выполняется")
+            self._stop_event.clear()
             self._state = MissionState(status="running", current_step=0, total_steps=len(actions))
             self._thread = threading.Thread(
                 target=self._run,
@@ -76,6 +82,31 @@ class MissionEngine:
                 daemon=True,
             )
             self._thread.start()
+
+    def stop(self, action: str = "land") -> None:
+        """Остановить runner и передать безопасную команду непосредственно FC."""
+        action = action.strip().lower()
+        if action not in {"land", "rtl", "disarm"}:
+            raise ValueError("stop action: land, rtl или disarm")
+        self._stop_event.set()
+        if action == "land":
+            self._drone.land()
+        elif action == "rtl":
+            self._drone.return_home()
+        else:
+            self._drone.disarm()
+        with self._lock:
+            self._state.status = "stopped"
+            self._state.current_action = action
+            self._state.error = None
+
+    def _check_stopped(self) -> None:
+        if self._stop_event.is_set():
+            raise MissionStopped()
+
+    def _sleep(self, seconds: float) -> None:
+        if self._stop_event.wait(max(0.0, seconds)):
+            raise MissionStopped()
 
     def _profile(self) -> str:
         return self._drone.get_capabilities().profile
@@ -87,11 +118,15 @@ class MissionEngine:
 
     def _finish_ok(self) -> None:
         with self._lock:
+            if self._stop_event.is_set():
+                return
             self._state.status = "completed"
             self._state.current_action = None
 
     def _finish_error(self, error: str) -> None:
         with self._lock:
+            if self._stop_event.is_set():
+                return
             self._state.status = "error"
             self._state.error = error
 
@@ -117,6 +152,7 @@ class MissionEngine:
         try:
             self._drone.connect()
             self._telemetry.start()
+            self._check_stopped()
 
             if self._needs_gps(actions):
                 self._wait_gps_ready()
@@ -126,12 +162,13 @@ class MissionEngine:
                 return
 
             for i, a in enumerate(actions, start=1):
+                self._check_stopped()
                 self._set_step(i, a.action)
 
                 if isinstance(a, ArmAction):
                     self._drone.arm()
                     if self._profile() == "ardupilot":
-                        time.sleep(settings.ardupilot_arm_settle_s)
+                        self._sleep(settings.ardupilot_arm_settle_s)
 
                 elif isinstance(a, DisarmAction):
                     self._drone.disarm()
@@ -160,12 +197,15 @@ class MissionEngine:
                     self._wait_goto(a.lat, a.lon, a.alt, timeout_s=180)
 
                 elif isinstance(a, WaitAction):
-                    time.sleep(float(a.seconds))
+                    self._sleep(float(a.seconds))
 
                 else:
                     raise RuntimeError(f"Неизвестное действие: {a.action}")
 
             self._finish_ok()
+        except MissionStopped:
+            # stop() уже записал конечный статус и отправил LAND/RTL/DISARM.
+            pass
         except Exception as e:
             self._finish_error(str(e))
 
@@ -184,6 +224,7 @@ class MissionEngine:
         min_sats = max(1, int(settings.ardupilot_min_gps_sats))
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
+            self._check_stopped()
             snap = self._telemetry.get_snapshot()
             fix = snap.gps_fix or 0
             sats = snap.gps_sats or 0
@@ -191,7 +232,7 @@ class MissionEngine:
                 return
             if snap.lat is not None and snap.lon is not None and sats >= min_sats:
                 return
-            time.sleep(0.3)
+            self._sleep(0.3)
         raise TimeoutError(
             f"Timeout: нет GPS 3D (нужно ≥{min_sats} спутников) для миссии ArduPilot/INAV"
         )
@@ -210,47 +251,51 @@ class MissionEngine:
             min_alt = target_m * frac
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
+            self._check_stopped()
             snap = self._telemetry.get_snapshot()
             if snap.alt is not None and snap.alt >= min_alt:
                 return
-            time.sleep(0.2)
+            self._sleep(0.2)
         raise TimeoutError(f"Timeout: takeoff altitude не достигнута (ожидали >= {min_alt:.2f} м)")
 
     def _wait_land(self, timeout_s: float) -> None:
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
+            self._check_stopped()
             snap = self._telemetry.get_snapshot()
             landed = (snap.armed is False) or (snap.alt is not None and snap.alt < 0.5)
             if landed:
                 return
-            time.sleep(0.3)
+            self._sleep(0.3)
 
     def _wait_goto(self, lat: float, lon: float, alt: float, timeout_s: float) -> None:
         tol_m = float(settings.ardupilot_goto_tol_m)
         tol_alt = float(settings.ardupilot_goto_alt_tol_m)
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
+            self._check_stopped()
             snap = self._telemetry.get_snapshot()
             if snap.lat is None or snap.lon is None or snap.alt is None:
-                time.sleep(0.2)
+                self._sleep(0.2)
                 continue
             horiz = _haversine_m(snap.lat, snap.lon, lat, lon)
             if horiz <= tol_m and abs(snap.alt - alt) <= tol_alt:
                 return
-            time.sleep(0.2)
+            self._sleep(0.2)
         raise TimeoutError(f"Timeout: goto не достигнут ({lat:.6f}, {lon:.6f}, {alt:.1f} м)")
 
     def _wait_auto_complete(self, timeout_s: float) -> None:
         """Ждём завершения AUTO: disarm или посадка (alt < 1 м)."""
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
+            self._check_stopped()
             snap = self._telemetry.get_snapshot()
             if snap.armed is False:
                 return
             if snap.alt is not None and snap.alt < 1.0 and snap.mode in ("LAND", "RTL", None):
-                time.sleep(2.0)
+                self._sleep(2.0)
                 snap2 = self._telemetry.get_snapshot()
                 if snap2.armed is False or (snap2.alt is not None and snap2.alt < 0.6):
                     return
-            time.sleep(0.5)
+            self._sleep(0.5)
         raise TimeoutError("Timeout: ArduPilot AUTO миссия не завершилась")

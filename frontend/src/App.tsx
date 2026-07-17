@@ -6,7 +6,7 @@ import { MissionBuilder } from './pages/MissionBuilder'
 import { RemotePage } from './pages/RemotePage'
 import { VisionPage } from './pages/VisionPage'
 import { Sim3DPage } from './pages/Sim3DPage'
-import { BetaflightSequencePage } from './pages/BetaflightSequencePage'
+import { FlightSequencePage } from './pages/FlightSequencePage'
 
 function App() {
   return (
@@ -15,7 +15,8 @@ function App() {
         <Route path="/" element={<Navigate to="/mission-control" replace />} />
         <Route path="/mission-control" element={<MissionControlPage />} />
         <Route path="/mission" element={<MissionBuilder />} />
-        <Route path="/betaflight" element={<BetaflightSequencePage />} />
+        <Route path="/betaflight" element={<FlightSequencePage />} />
+        <Route path="/sequence" element={<FlightSequencePage />} />
         <Route path="/pult" element={<RemotePage />} />
         <Route path="/vision" element={<VisionPage />} />
         <Route path="/sim3d" element={<Sim3DPage />} />

@@ -16,5 +16,10 @@ export const missionApi = {
   start: (body: MissionRequest) =>
     apiFetch<MissionStatus>('/mission', { method: 'POST', body: JSON.stringify(body) }),
   status: () => apiFetch<MissionStatus>('/mission/status'),
+  stop: (action: 'land' | 'rtl' | 'disarm' = 'land') =>
+    apiFetch<MissionStatus>('/mission/stop', {
+      method: 'POST',
+      body: JSON.stringify({ action }),
+    }),
 }
 

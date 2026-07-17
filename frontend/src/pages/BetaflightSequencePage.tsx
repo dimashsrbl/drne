@@ -227,26 +227,9 @@ export function BetaflightSequencePage() {
     setVision(res)
   }
 
-  const lockTarget = async () => {
-    await fetch(trackerUrl('/lock'), { method: 'POST' })
-    await checkVision()
-  }
-
   const unlockTarget = async () => {
     await fetch(trackerUrl('/unlock'), { method: 'POST' })
     await checkVision()
-  }
-
-  const startTrack = async () => {
-    const res = await betaflightApi.trackStart({
-      port,
-      baud,
-      target_alt_m: 1.0,
-      throttle_us: 1410,
-      wait_lock_s: 90,
-      max_mission_s: MISSION_HARD_CAP_S,
-    })
-    setStatus(res)
   }
 
   /** Наведи объект в центр кадра → lock → взлёт 1 м → follow */

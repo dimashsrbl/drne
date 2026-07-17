@@ -53,8 +53,12 @@ class MissionRequest(BaseModel):
     mission: list[MissionAction] = Field(min_length=1)
 
 
+class MissionStopRequest(BaseModel):
+    action: Literal["land", "rtl", "disarm"] = "land"
+
+
 class MissionStatusResponse(BaseModel):
-    status: Literal["idle", "running", "completed", "error"]
+    status: Literal["idle", "running", "completed", "stopped", "error"]
     current_step: int | None = None
     total_steps: int | None = None
     current_action: str | None = None

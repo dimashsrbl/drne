@@ -57,6 +57,7 @@ export function AppShell() {
         <nav className="gcsNav" aria-label="Разделы">
           {nav.map((item) => {
             const { to, label, mc } = item as { to: string; label: string; mc?: true }
+            const displayLabel = to === '/betaflight' && profile?.profile === 'ardupilot' ? 'Pixhawk' : label
             return (
               <NavLink
                 key={to}
@@ -65,7 +66,7 @@ export function AppShell() {
                   `gcsNavLink${mc ? (missionControlActive ? ' gcsNavLink--active' : '') : isActive ? ' gcsNavLink--active' : ''}`
                 }
               >
-                {label}
+                {displayLabel}
               </NavLink>
             )
           })}
