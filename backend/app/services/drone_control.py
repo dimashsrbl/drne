@@ -55,7 +55,39 @@ class DroneControlService:
         self._last_arm_ack: int | None = None
         self._last_base_mode: int | None = None
 
-    def _apply_heartbeat(self, msg) -> tuple[str | None, bool]:
+    def _is_fc_heartbeat(self, msg) -> bool:
+        """Только HEARTBEAT автопилота (FMU), не GCS и не IO/companion."""
+        if msg is None or msg.get_type() != "HEARTBEAT":
+            return False
+        src = int(msg.get_srcSystem())
+        if src == int(settings.mavlink_system_id):
+            return False
+        if int(getattr(msg, "autopilot", -1)) == int(mavutil.mavlink.MAV_AUTOPILOT_INVALID):
+            return False
+        mtype = int(getattr(msg, "type", 0))
+        if mtype in (
+            int(mavutil.mavlink.MAV_TYPE_GCS),
+            int(mavutil.mavlink.MAV_TYPE_ONBOARD_CONTROLLER),
+            int(mavutil.mavlink.MAV_TYPE_GIMBAL),
+            int(mavutil.mavlink.MAV_TYPE_GENERIC),
+            int(mavutil.mavlink.MAV_TYPE_ADSB),
+            int(mavutil.mavlink.MAV_TYPE_CAMERA),
+        ):
+            return False
+        comp = int(msg.get_srcComponent())
+        if self._targets is not None:
+            if src != int(self._targets.target_system):
+                return False
+            want = int(self._targets.target_component) or 1
+            if comp != want:
+                return False
+        elif comp not in (0, 1, int(mavutil.mavlink.MAV_COMP_ID_AUTOPILOT1)):
+            return False
+        return True
+
+    def _apply_heartbeat(self, msg) -> tuple[str | None, bool | None]:
+        if not self._is_fc_heartbeat(msg):
+            return self._last_mode, self._last_armed
         base_mode = getattr(msg, "base_mode", 0)
         self._last_base_mode = int(base_mode)
         armed = bool(base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
@@ -143,12 +175,13 @@ class DroneControlService:
                 0, 0, 0, 0, 0,
             )
         try:
-            set_interval(0,  1.0)   # HEARTBEAT
+            set_interval(0,  2.0)   # HEARTBEAT
             set_interval(1,  2.0)   # SYS_STATUS
             set_interval(33, 5.0)   # GLOBAL_POSITION_INT
             set_interval(24, 2.0)   # GPS_RAW_INT
             set_interval(30, 2.0)   # ATTITUDE
             set_interval(74, 2.0)   # VFR_HUD
+            set_interval(77, 2.0)   # COMMAND_ACK
             # Fallback для портов, где SET_MESSAGE_INTERVAL игнорируется.
             for stream_id, rate in (
                 (mavutil.mavlink.MAV_DATA_STREAM_EXTRA1, 4),
@@ -244,12 +277,13 @@ class DroneControlService:
         """Читать UART под уже взятым lock; обновлять armed/тексты."""
         deadline = time.monotonic() + max(0.05, seconds)
         while time.monotonic() < deadline:
+            remaining = max(0.05, deadline - time.monotonic())
             try:
-                msg = conn.recv_match(blocking=False, timeout=0)
+                # blocking=False на UART часто ничего не читает → теряем HEARTBEAT/ACK.
+                msg = conn.recv_match(blocking=True, timeout=min(0.3, remaining))
             except Exception:
                 break
             if msg is None or msg.get_type() == "BAD_DATA":
-                time.sleep(0.02)
                 continue
             if self._ingest_side_message(msg):
                 continue
@@ -371,10 +405,11 @@ class DroneControlService:
                         if settings.mavlink_target_system is not None
                         else int(hb.get_srcSystem())
                     )
+                    # FMU = component 1. Не брать IO-копроцессор с Pixhawk 2.4.8.
                     target_component = (
                         settings.mavlink_target_component
                         if settings.mavlink_target_component is not None
-                        else int(hb.get_srcComponent())
+                        else 1
                     )
 
                     # Запомнить mode/armed из уже полученного heartbeat автопилота.
@@ -510,11 +545,7 @@ class DroneControlService:
             return snap
 
         if mtype == "HEARTBEAT":
-            # Только свой GCS (sys=255) пропускаем. Остальное — борт.
-            src = int(msg.get_srcSystem())
-            if src == int(settings.mavlink_system_id):
-                return None
-            if int(getattr(msg, "autopilot", -1)) == int(mavutil.mavlink.MAV_AUTOPILOT_INVALID):
+            if not self._is_fc_heartbeat(msg):
                 return None
             mode_name, armed = self._apply_heartbeat(msg)
             snap.armed = armed
@@ -664,8 +695,8 @@ class DroneControlService:
         wait_s = float(timeout_s if timeout_s is not None else settings.ardupilot_arm_timeout_s)
         self._recent_texts.clear()
         self._last_arm_ack = None
+        accepted = int(mavutil.mavlink.MAV_RESULT_ACCEPTED)
 
-        # Весь ARM под одним lock — иначе telemetry-поток съедает STATUSTEXT/ACK.
         with self._lock:
             conn, t = self._require()
             if settings.sitl_relax_preflight:
@@ -674,20 +705,20 @@ class DroneControlService:
                 self._set_mode(conn, t, "STABILIZE")
             except Exception:
                 pass
-            for _ in range(5):
+            for _ in range(3):
                 self._send_rc_idle(conn, t)
-                self._drain_locked(conn, 0.05)
+                self._drain_locked(conn, 0.08)
             self._arm_cmd(conn, t, True, force=use_force)
-            self._drain_locked(conn, min(wait_s, 6.0))
-            if self._last_armed is True:
+            self._drain_locked(conn, min(wait_s, 8.0))
+            if self._last_armed is True or self._last_arm_ack == accepted:
                 return
             if use_force:
                 self._arm_cmd(conn, t, True, force=True)
-                self._drain_locked(conn, min(wait_s, 5.0))
-                if self._last_armed is True:
+                self._drain_locked(conn, 3.0)
+                if self._last_armed is True or self._last_arm_ack == accepted:
                     return
 
-        self._wait_armed_state(True, timeout_s=1.0, used_force=use_force, hold_lock=True)
+        self._wait_armed_state(True, timeout_s=max(3.0, wait_s * 0.4), used_force=use_force, hold_lock=True)
 
     def disarm(self, timeout_s: float | None = None) -> None:
         wait_s = float(timeout_s if timeout_s is not None else settings.ardupilot_arm_timeout_s)
@@ -699,7 +730,7 @@ class DroneControlService:
             self._drain_locked(conn, min(wait_s, 5.0))
             if self._last_armed is False:
                 return
-        self._wait_armed_state(False, timeout_s=1.0, used_force=False, hold_lock=True)
+        self._wait_armed_state(False, timeout_s=max(3.0, wait_s * 0.4), used_force=False, hold_lock=True)
 
     def arm_debug(self, force: bool = True, seconds: float = 8.0) -> dict:
         """Диагностика ARM: тексты FC, ACK, mode, armed."""
