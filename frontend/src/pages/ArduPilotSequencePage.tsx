@@ -8,9 +8,10 @@ type ActionName = MissionAction['action']
 
 const actionOptions: { value: ActionName; label: string }[] = [
   { value: 'arm', label: 'ARM' },
-  { value: 'takeoff', label: 'Взлёт (GUIDED)' },
+  { value: 'takeoff', label: 'Взлёт' },
   { value: 'wait', label: 'Ожидание' },
-  { value: 'goto', label: 'Перелёт к точке' },
+  { value: 'nudge', label: 'Вперёд / назад (баро)' },
+  { value: 'goto', label: 'Перелёт к точке (GPS)' },
   { value: 'land', label: 'Посадка' },
   { value: 'return_home', label: 'RTL — домой' },
   { value: 'disarm', label: 'DISARM' },
@@ -23,6 +24,15 @@ const flightPreset: MissionAction[] = [
   { action: 'land' },
 ]
 
+const baroPreset: MissionAction[] = [
+  { action: 'arm', force: true },
+  { action: 'takeoff', alt: 1, no_gps: true },
+  { action: 'wait', seconds: 2 },
+  { action: 'nudge', direction: 'forward', seconds: 2 },
+  { action: 'wait', seconds: 1 },
+  { action: 'land' },
+]
+
 const benchPreset: MissionAction[] = [
   { action: 'arm', force: true },
   { action: 'wait', seconds: 3 },
@@ -30,19 +40,24 @@ const benchPreset: MissionAction[] = [
 ]
 
 function defaultAction(action: ActionName): MissionAction {
-  if (action === 'takeoff') return { action, alt: 1 }
+  if (action === 'takeoff') return { action, alt: 1, no_gps: true }
   if (action === 'wait') return { action, seconds: 3 }
   if (action === 'goto') return { action, lat: 0, lon: 0, alt: 3 }
+  if (action === 'nudge') return { action, direction: 'forward', seconds: 2 }
   return { action }
 }
 
 function requiresGps(actions: MissionAction[]) {
-  return actions.some((a) => a.action === 'takeoff' || a.action === 'goto' || a.action === 'return_home')
+  return actions.some((a) => {
+    if (a.action === 'goto' || a.action === 'return_home') return true
+    if (a.action === 'takeoff' && !a.no_gps) return true
+    return false
+  })
 }
 
 export function ArduPilotSequencePage() {
   const { telemetry, wsStatus } = useTelemetry()
-  const [steps, setSteps] = useState<MissionAction[]>(flightPreset)
+  const [steps, setSteps] = useState<MissionAction[]>(baroPreset)
   const [status, setStatus] = useState<MissionStatus | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -103,7 +118,8 @@ export function ArduPilotSequencePage() {
           <div className="alertTitle" style={{ color: '#93c5fd' }}>MAVLink вместо MSP</div>
           <div className="alertBody">
             Команды идут: браузер → Pi backend → <code>/dev/serial0</code> → Pixhawk. Порт и throttle_us больше не задаются:
-            высоту, стабилизацию и моторы контролирует ArduPilot. Для взлёта, GOTO и RTL нужен GPS 3D.
+            высоту, стабилизацию и моторы контролирует ArduPilot. GOTO/RTL — только с GPS.
+            В помещении: пресет «Баро 1 м → вперёд» (ALT_HOLD + барометр, без GPS). Пропеллеры только когда готов.
           </div>
         </div>
       </section>
@@ -112,7 +128,8 @@ export function ArduPilotSequencePage() {
         <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
           <div className="cardTitle" style={{ margin: 0 }}>Последовательность</div>
           <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
-            <button className="btn primary" disabled={!!busy} onClick={() => setSteps(flightPreset)}>Взлёт 1 м → LAND</button>
+            <button className="btn primary" disabled={!!busy} onClick={() => setSteps(baroPreset)}>Баро 1 м → вперёд</button>
+            <button className="btn" disabled={!!busy} onClick={() => setSteps(flightPreset)}>GPS взлёт 1 м → LAND</button>
             <button className="btn" disabled={!!busy} onClick={() => setSteps(benchPreset)}>Bench ARM → DISARM</button>
           </div>
         </div>
@@ -121,8 +138,7 @@ export function ArduPilotSequencePage() {
           <div className="alert" style={{ marginBottom: 12, borderColor: 'rgba(251,191,36,0.55)' }}>
             <div className="alertTitle" style={{ color: '#fbbf24' }}>Нет GPS 3D</div>
             <div className="alertBody">
-              Для этой миссии нужно минимум 6 спутников и fix 3D. Для проверки без GPS выбери «Bench ARM → DISARM»
-              (force-arm, только без пропеллеров).
+              Для GPS-миссии нужно ≥6 спутников и fix 3D. Без GPS бери «Баро 1 м → вперёд» или «Bench ARM → DISARM».
             </div>
           </div>
         ) : null}
@@ -151,17 +167,55 @@ export function ArduPilotSequencePage() {
                 </label>
 
                 {step.action === 'takeoff' ? (
-                  <label className="field" style={{ maxWidth: 140 }}>
-                    <span>Высота AGL, м</span>
-                    <input
-                      type="number"
-                      min={1}
-                      max={120}
-                      step={0.5}
-                      value={step.alt}
-                      onChange={(e) => updateStep(index, { ...step, alt: Number(e.target.value) })}
-                    />
-                  </label>
+                  <>
+                    <label className="field" style={{ maxWidth: 140 }}>
+                      <span>Высота AGL, м</span>
+                      <input
+                        type="number"
+                        min={0.5}
+                        max={120}
+                        step={0.5}
+                        value={step.alt}
+                        onChange={(e) => updateStep(index, { ...step, alt: Number(e.target.value) })}
+                      />
+                    </label>
+                    <label className="field" style={{ maxWidth: 160 }}>
+                      <span>Без GPS (баро)</span>
+                      <select
+                        value={step.no_gps ? '1' : '0'}
+                        onChange={(e) => updateStep(index, { ...step, no_gps: e.target.value === '1' })}
+                      >
+                        <option value="1">да — ALT_HOLD</option>
+                        <option value="0">нет — GUIDED/GPS</option>
+                      </select>
+                    </label>
+                  </>
+                ) : null}
+
+                {step.action === 'nudge' ? (
+                  <>
+                    <label className="field" style={{ maxWidth: 160 }}>
+                      <span>Направление</span>
+                      <select
+                        value={step.direction}
+                        onChange={(e) => updateStep(index, { ...step, direction: e.target.value as 'forward' | 'back' })}
+                      >
+                        <option value="forward">вперёд</option>
+                        <option value="back">назад</option>
+                      </select>
+                    </label>
+                    <label className="field" style={{ maxWidth: 140 }}>
+                      <span>Секунды</span>
+                      <input
+                        type="number"
+                        min={0.2}
+                        max={8}
+                        step={0.5}
+                        value={step.seconds}
+                        onChange={(e) => updateStep(index, { ...step, seconds: Number(e.target.value) })}
+                      />
+                    </label>
+                  </>
                 ) : null}
 
                 {step.action === 'wait' ? (
@@ -242,7 +296,8 @@ export function ArduPilotSequencePage() {
             <div className="k">LINK</div><div className="v">{wsStatus === 'open' ? 'ONLINE' : wsStatus}</div>
             <div className="k">ARM</div><div className="v">{telemetry?.armed == null ? '—' : telemetry.armed ? 'ARMED' : 'DISARMED'}</div>
             <div className="k">MODE</div><div className="v">{telemetry?.mode ?? '—'}</div>
-            <div className="k">ALT</div><div className="v">{telemetry?.alt == null ? '—' : `${telemetry.alt.toFixed(2)} м`}</div>
+            <div className="k">ALT</div><div className="v">{telemetry?.alt == null ? '—' : `${telemetry.alt.toFixed(2)} м AGL`}</div>
+            <div className="k">BARO</div><div className="v">{telemetry?.baro_alt_m == null ? '—' : `${telemetry.baro_alt_m.toFixed(1)} м`}</div>
             <div className="k">HDG</div><div className="v">{telemetry?.heading == null ? '—' : `${telemetry.heading.toFixed(0)}°`}</div>
             <div className="k">GPS</div>
             <div className="v" style={{ color: gpsReady ? '#4ade80' : '#fbbf24' }}>

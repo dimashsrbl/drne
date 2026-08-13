@@ -15,6 +15,7 @@ from app.schemas.mission import (
     ReturnHomeAction,
     TakeoffAction,
     WaitAction,
+    NudgeAction,
 )
 from app.services.ardupilot_mission import actions_support_auto_upload
 from app.services.drone_control import DroneControlService
@@ -131,7 +132,12 @@ class MissionEngine:
             self._state.error = error
 
     def _needs_gps(self, actions: list[MissionAction]) -> bool:
-        return any(isinstance(a, (TakeoffAction, GotoAction, ReturnHomeAction)) for a in actions)
+        for a in actions:
+            if isinstance(a, (GotoAction, ReturnHomeAction)):
+                return True
+            if isinstance(a, TakeoffAction) and not a.no_gps:
+                return True
+        return False
 
     def _use_ardupilot_auto(self, actions: list[MissionAction], prefer_auto: bool) -> bool:
         if self._profile() != "ardupilot":
@@ -186,15 +192,13 @@ class MissionEngine:
                         self._sleep(0.3)
 
                 elif isinstance(a, TakeoffAction):
-                    if a.no_gps and self._profile() == "ardupilot":
-                        raise RuntimeError("ArduPilot GUIDED takeoff требует GPS (no_gps не поддерживается)")
                     baseline = self._telemetry.get_snapshot().alt
                     self._drone.takeoff(a.alt, no_gps=a.no_gps)
                     self._wait_takeoff_complete(
                         target_m=a.alt,
                         no_gps=a.no_gps,
                         baseline_alt=baseline,
-                        timeout_s=90.0 if a.alt <= 5.0 else 120.0,
+                        timeout_s=40.0 if a.no_gps else (90.0 if a.alt <= 5.0 else 120.0),
                     )
 
                 elif isinstance(a, LandAction):
@@ -209,7 +213,18 @@ class MissionEngine:
                     self._wait_goto(a.lat, a.lon, a.alt, timeout_s=180)
 
                 elif isinstance(a, WaitAction):
-                    self._sleep(float(a.seconds))
+                    if isinstance(self._drone, DroneControlService) and hasattr(self._drone, "hold_hover"):
+                        end = time.monotonic() + float(a.seconds)
+                        while time.monotonic() < end:
+                            self._check_stopped()
+                            self._drone.hold_hover(min(0.2, end - time.monotonic()))
+                    else:
+                        self._sleep(float(a.seconds))
+
+                elif isinstance(a, NudgeAction):
+                    if not isinstance(self._drone, DroneControlService):
+                        raise RuntimeError("nudge доступен только для ArduPilot")
+                    self._drone.nudge(a.direction, a.seconds)
 
                 else:
                     raise RuntimeError(f"Неизвестное действие: {a.action}")
@@ -257,7 +272,10 @@ class MissionEngine:
         timeout_s: float,
     ) -> None:
         frac = 0.85
-        if no_gps and baseline_alt is not None:
+        # no_gps: alt в телеметрии уже AGL (баро − baseline).
+        if no_gps:
+            min_alt = target_m * frac
+        elif baseline_alt is not None:
             min_alt = baseline_alt + target_m * frac
         else:
             min_alt = target_m * frac

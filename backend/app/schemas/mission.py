@@ -45,8 +45,14 @@ class WaitAction(ActionBase):
     seconds: float = Field(gt=0, le=3600)
 
 
+class NudgeAction(ActionBase):
+    action: Literal["nudge"]
+    direction: Literal["forward", "back"] = "forward"
+    seconds: float = Field(gt=0, le=15)
+
+
 MissionAction = Annotated[
-    Union[ArmAction, DisarmAction, TakeoffAction, LandAction, ReturnHomeAction, GotoAction, WaitAction],
+    Union[ArmAction, DisarmAction, TakeoffAction, LandAction, ReturnHomeAction, GotoAction, WaitAction, NudgeAction],
     Field(discriminator="action"),
 ]
 

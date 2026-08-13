@@ -9,6 +9,7 @@ export type MissionAction =
   | { action: 'goto'; lat: number; lon: number; alt: number }
   | { action: 'wait'; seconds: number }
   | { action: 'return_home' }
+  | { action: 'nudge'; direction: 'forward' | 'back'; seconds: number }
 
 export type MissionRequest = { mission: MissionAction[] }
 

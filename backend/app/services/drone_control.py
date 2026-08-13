@@ -54,6 +54,8 @@ class DroneControlService:
         self._recent_texts: list[str] = []
         self._last_arm_ack: int | None = None
         self._last_base_mode: int | None = None
+        self._last_baro: float | None = None
+        self._baro_baseline: float | None = None
 
     def _is_fc_heartbeat(self, msg) -> bool:
         """Только HEARTBEAT автопилота (FMU), не GCS и не IO/companion."""
@@ -180,8 +182,9 @@ class DroneControlService:
             set_interval(33, 5.0)   # GLOBAL_POSITION_INT
             set_interval(24, 2.0)   # GPS_RAW_INT
             set_interval(30, 2.0)   # ATTITUDE
-            set_interval(74, 2.0)   # VFR_HUD
+            set_interval(74, 4.0)   # VFR_HUD (баро/скорость)
             set_interval(77, 2.0)   # COMMAND_ACK
+            set_interval(29, 4.0)   # SCALED_PRESSURE
             # Fallback для портов, где SET_MESSAGE_INTERVAL игнорируется.
             for stream_id, rate in (
                 (mavutil.mavlink.MAV_DATA_STREAM_EXTRA1, 4),
@@ -472,19 +475,18 @@ class DroneControlService:
 
         deadline = time.monotonic() + wait_s
         while time.monotonic() < deadline:
+            remaining = max(0.05, deadline - time.monotonic())
             try:
                 with self._lock:
                     conn = self._conn
                     if conn is None:
                         return None
-                    # recv тоже только под lock — иначе гонка с GCS heartbeat.
-                    m = conn.recv_match(blocking=False, timeout=0)
+                    m = conn.recv_match(blocking=True, timeout=min(0.3, remaining))
                 if m is not None and m.get_type() != "BAD_DATA":
                     self._ingest_side_message(m)
                     return m
             except Exception:
                 return None
-            time.sleep(0.02)
         return None
 
     def _parse_telemetry_message(self, msg) -> TelemetrySnapshot | None:
@@ -556,11 +558,34 @@ class DroneControlService:
 
         if mtype == "VFR_HUD":
             if getattr(msg, "alt", None) is not None:
-                snap.alt = float(msg.alt)
+                baro = float(msg.alt)
+                self._last_baro = baro
+                snap.baro_alt_m = baro
+                if self._baro_baseline is None and self._last_armed is True:
+                    self._baro_baseline = baro
+                snap.baro_baseline_m = self._baro_baseline
+                if self._baro_baseline is not None:
+                    snap.alt = baro - self._baro_baseline
+                else:
+                    snap.alt = baro
             if getattr(msg, "groundspeed", None) is not None:
                 snap.speed = float(msg.groundspeed)
             if getattr(msg, "heading", None) is not None:
                 snap.heading = float(msg.heading)
+            snap.status = "connected"
+            snap.updated_at_monotonic = now
+            return snap
+
+        if mtype == "SCALED_PRESSURE":
+            press = float(getattr(msg, "press_abs", 0) or 0)
+            if press > 200:
+                # ISA, press_abs в гПа
+                baro = 44330.77 * (1.0 - (press / 1013.25) ** 0.190263)
+                self._last_baro = baro
+                snap.baro_alt_m = baro
+                snap.baro_baseline_m = self._baro_baseline
+                if self._baro_baseline is not None:
+                    snap.alt = baro - self._baro_baseline
             snap.status = "connected"
             snap.updated_at_monotonic = now
             return snap
@@ -711,11 +736,15 @@ class DroneControlService:
             self._arm_cmd(conn, t, True, force=use_force)
             self._drain_locked(conn, min(wait_s, 8.0))
             if self._last_armed is True or self._last_arm_ack == accepted:
+                if self._last_baro is not None:
+                    self._baro_baseline = self._last_baro
                 return
             if use_force:
                 self._arm_cmd(conn, t, True, force=True)
                 self._drain_locked(conn, 3.0)
                 if self._last_armed is True or self._last_arm_ack == accepted:
+                    if self._last_baro is not None:
+                        self._baro_baseline = self._last_baro
                     return
 
         self._wait_armed_state(True, timeout_s=max(3.0, wait_s * 0.4), used_force=use_force, hold_lock=True)
@@ -770,13 +799,62 @@ class DroneControlService:
             0, 0, 0, 0, 0,
         )
 
+    def _rc_send(
+        self,
+        conn: mavutil.mavfile,
+        t: MavlinkTargets,
+        *,
+        pitch: int = 1500,
+        roll: int = 1500,
+        throttle: int = 1500,
+        yaw: int = 1500,
+    ) -> None:
+        conn.mav.rc_channels_override_send(
+            t.target_system,
+            t.target_component,
+            int(roll),
+            int(pitch),
+            int(throttle),
+            int(yaw),
+            0, 0, 0, 0,
+        )
+
+    def hold_hover(self, seconds: float = 0.2) -> None:
+        """Держать ALT_HOLD: стики центр, газ mid (без пульта override истекает)."""
+        deadline = time.monotonic() + max(0.05, seconds)
+        with self._lock:
+            conn, t = self._require()
+            while time.monotonic() < deadline:
+                self._rc_send(conn, t, throttle=1500)
+                self._drain_locked(conn, 0.08)
+
+    def nudge(self, direction: str = "forward", seconds: float = 1.5) -> None:
+        """Без GPS: лёгкий pitch в ALT_HOLD, высоту держит баро."""
+        direction = (direction or "forward").strip().lower()
+        pitch = 1380 if direction in ("forward", "fwd", "вперёд", "вперед") else 1620
+        hold_s = max(0.2, min(float(seconds), 8.0))
+        deadline = time.monotonic() + hold_s
+        with self._lock:
+            conn, t = self._require()
+            try:
+                self._set_mode(conn, t, "ALT_HOLD")
+            except Exception:
+                pass
+            while time.monotonic() < deadline:
+                self._rc_send(conn, t, pitch=pitch, throttle=1500)
+                self._drain_locked(conn, 0.08)
+            for _ in range(6):
+                self._rc_send(conn, t, throttle=1500)
+                self._drain_locked(conn, 0.08)
+
     def takeoff(self, altitude_m: float, no_gps: bool = False) -> None:
         """
-        ArduCopter: GUIDED + MAV_CMD_NAV_TAKEOFF.
-        altitude_m — AGL. no_gps игнорируется (нужен GPS для GUIDED).
+        GPS: GUIDED + NAV_TAKEOFF.
+        Без GPS: ALT_HOLD + RC throttle, высота по барометру (AGL).
         """
         if no_gps:
-            pass  # ArduPilot GUIDED требует GPS; флаг оставлен для совместимости API.
+            self._takeoff_althold(altitude_m)
+            return
         alt = float(max(1.0, min(altitude_m, 120.0)))
         with self._lock:
             conn, t = self._require()
@@ -789,10 +867,35 @@ class DroneControlService:
                 t.target_system, t.target_component,
                 mavutil.mavlink.MAV_CMD_NAV_TAKEOFF,
                 0,
-                0, 0, 0, 0,   # pitch / empty / empty / yaw — не используются для мультикоптера
-                0, 0,          # lat/lon — 0 означает «текущее положение»
-                alt,           # высота AGL
+                0, 0, 0, 0,
+                0, 0,
+                alt,
             )
+
+    def _takeoff_althold(self, altitude_m: float) -> None:
+        target = float(max(0.4, min(altitude_m, 8.0)))
+        with self._lock:
+            conn, t = self._require()
+            try:
+                self._set_mode(conn, t, "ALT_HOLD")
+            except Exception:
+                pass
+            self._drain_locked(conn, 0.4)
+            if self._last_armed is not True:
+                self._arm_cmd(conn, t, True, force=True)
+                self._drain_locked(conn, 3.0)
+            if self._last_baro is not None and self._baro_baseline is None:
+                self._baro_baseline = self._last_baro
+            deadline = time.monotonic() + 20.0
+            while time.monotonic() < deadline:
+                self._rc_send(conn, t, throttle=1680)
+                self._drain_locked(conn, 0.12)
+                if self._last_baro is not None and self._baro_baseline is not None:
+                    if (self._last_baro - self._baro_baseline) >= target * 0.8:
+                        break
+            for _ in range(10):
+                self._rc_send(conn, t, throttle=1500)
+                self._drain_locked(conn, 0.1)
 
     def land(self) -> None:
         with self._lock:
