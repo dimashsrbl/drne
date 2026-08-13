@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api } from '../api/client'
 import { missionApi, type MissionAction } from '../api/mission'
+import { trackerUrl } from '../api/tracker'
 import type { MissionStatus } from '../api/types'
 import { useTelemetry } from '../telemetry/TelemetryProvider'
 
@@ -61,6 +62,8 @@ export function ArduPilotSequencePage() {
   const [status, setStatus] = useState<MissionStatus | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [cameraNote, setCameraNote] = useState('подключение…')
+  const streamSrc = trackerUrl('/stream')
 
   const gpsReady = (telemetry?.gps_fix ?? 0) >= 3 && (telemetry?.gps_sats ?? 0) >= 6
   const missionNeedsGps = requiresGps(steps)
@@ -83,6 +86,26 @@ export function ArduPilotSequencePage() {
       window.clearInterval(id)
     }
   }, [status?.status])
+
+  useEffect(() => {
+    let dead = false
+    const ping = () => {
+      void fetch(trackerUrl('/target'))
+        .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+        .then((j: { camera_status?: string }) => {
+          if (!dead) setCameraNote(j.camera_status === 'ok' ? 'онлайн' : j.camera_status || 'нет кадра')
+        })
+        .catch(() => {
+          if (!dead) setCameraNote('vision-tracker не отвечает (:8001)')
+        })
+    }
+    ping()
+    const id = window.setInterval(ping, 4000)
+    return () => {
+      dead = true
+      window.clearInterval(id)
+    }
+  }, [])
 
   const run = async (label: string, fn: () => Promise<unknown>) => {
     setBusy(label)
@@ -290,6 +313,26 @@ export function ArduPilotSequencePage() {
       </section>
 
       <div style={{ display: 'grid', gap: 16, alignContent: 'start' }}>
+        <section className="card">
+          <div className="cardTitle">Камера Raspberry Pi</div>
+          <div className="hint" style={{ marginBottom: 8 }}>{cameraNote}</div>
+          <div
+            style={{
+              background: '#000',
+              borderRadius: 12,
+              overflow: 'hidden',
+              border: '1px solid rgba(255,255,255,0.12)',
+              minHeight: 220,
+            }}
+          >
+            <img
+              src={streamSrc}
+              alt="Pi camera"
+              style={{ width: '100%', display: 'block', minHeight: 220, objectFit: 'contain' }}
+            />
+          </div>
+        </section>
+
         <section className="card">
           <div className="cardTitle">Pixhawk</div>
           <div className="kv">
