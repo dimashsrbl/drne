@@ -43,7 +43,7 @@ export function TelemetryPanel({
         <div className="k">GPS</div>
         <div className="v">
           {telemetry?.gps_fix != null
-            ? `${telemetry.gps_fix >= 2 ? '3D' : telemetry.gps_fix === 1 ? '2D' : 'нет'}${telemetry.gps_sats != null ? ` · ${telemetry.gps_sats} sat` : ''}`
+            ? `${telemetry.gps_fix >= 3 ? '3D' : telemetry.gps_fix === 2 ? '2D' : telemetry.gps_fix === 1 ? 'нет фикса' : 'нет GPS'}${telemetry.gps_sats != null ? ` · ${telemetry.gps_sats} sat` : ''}`
             : '—'}
         </div>
         <div className="k">батарея</div>

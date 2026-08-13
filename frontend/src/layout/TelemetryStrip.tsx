@@ -49,9 +49,17 @@ export function TelemetryStrip() {
         <Cell label="LON">{t?.lon != null ? t.lon.toFixed(6) : '—'}</Cell>
         <Cell label="GPS">
           {t?.gps_fix != null || t?.gps_sats != null ? (
-            <span style={{ color: (t?.gps_fix ?? 0) >= 2 ? undefined : '#f87171' }}>
-              {t?.gps_fix != null ? (t.gps_fix >= 2 ? '3D' : t.gps_fix === 1 ? '2D' : '—') : '—'}
-              {t?.gps_sats != null ? ` · ${t.gps_sats}` : ''}
+            <span style={{ color: (t?.gps_fix ?? 0) >= 3 ? undefined : '#f87171' }}>
+              {t?.gps_fix != null
+                ? t.gps_fix >= 3
+                  ? '3D'
+                  : t.gps_fix === 2
+                    ? '2D'
+                    : t.gps_fix === 1
+                      ? 'нет фикса'
+                      : 'нет GPS'
+                : '—'}
+              {t?.gps_sats != null ? ` · ${t.gps_sats} sat` : ''}
             </span>
           ) : (
             '—'

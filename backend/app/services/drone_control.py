@@ -225,6 +225,8 @@ class DroneControlService:
                 ("BRD_SAFETY_DEFLT", 0.0),
                 # Без пульта: игнор RC receiver (bit0=1). Иначе RC_OPTIONS=32 ждёт idle throttle.
                 ("RC_OPTIONS", 1.0),
+                # SD Pixhawk часто забита логами (ENOSPC /APM/LOGS) — не писать на стенде.
+                ("LOG_BACKEND_TYPE", 0.0),
             ]
             for name, val in params:
                 pid = name.encode("ascii").ljust(16, b"\x00")[:16]
@@ -252,7 +254,8 @@ class DroneControlService:
     ) -> None:
         p1 = 1.0 if arm else 0.0
         use_force = settings.sitl_force_arm if force is None else bool(force)
-        p2 = 21196.0 if (use_force and arm) else 0.0
+        # 21196 нужен и на DISARM: иначе GCS-disarm отклоняется, если FC думает «в полёте».
+        p2 = 21196.0 if use_force else 0.0
         # Шлём и в autopilot component, и broadcast (comp=0) — Pixhawk иногда глотает один адрес.
         for comp in {int(t.target_component), 0, 1}:
             conn.mav.command_long_send(
@@ -314,6 +317,7 @@ class DroneControlService:
                     and self._last_arm_ack is not None
                     and self._last_arm_ack != int(mavutil.mavlink.MAV_RESULT_ACCEPTED)
                     and self._last_arm_ack != int(mavutil.mavlink.MAV_RESULT_IN_PROGRESS)
+                    and self._last_arm_ack != int(mavutil.mavlink.MAV_RESULT_FAILED)
                 ):
                     break
                 if hold_lock and conn is not None:
@@ -755,11 +759,24 @@ class DroneControlService:
         self._last_arm_ack = None
         with self._lock:
             conn, t = self._require()
+            # Снять RC override / газ, иначе FC считает что летит и обычный DISARM = FAILED.
+            try:
+                conn.mav.rc_channels_override_send(
+                    t.target_system, t.target_component, 0, 0, 0, 0, 0, 0, 0, 0
+                )
+            except Exception:
+                pass
+            self._send_rc_idle(conn, t)
+            self._drain_locked(conn, 0.3)
             self._arm_cmd(conn, t, False, force=True)
             self._drain_locked(conn, min(wait_s, 5.0))
             if self._last_armed is False:
                 return
-        self._wait_armed_state(False, timeout_s=max(3.0, wait_s * 0.4), used_force=False, hold_lock=True)
+            self._arm_cmd(conn, t, False, force=True)
+            self._drain_locked(conn, 2.0)
+            if self._last_armed is False:
+                return
+        self._wait_armed_state(False, timeout_s=max(3.0, wait_s * 0.4), used_force=True, hold_lock=True)
 
     def arm_debug(self, force: bool = True, seconds: float = 8.0) -> dict:
         """Диагностика ARM: тексты FC, ACK, mode, armed."""
