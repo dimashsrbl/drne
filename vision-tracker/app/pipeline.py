@@ -915,6 +915,73 @@ class TrackerSnapshot:
     detection_enabled: bool = True
 
 
+def _import_picamera2():
+    try:
+        from picamera2 import Picamera2
+
+        return Picamera2
+    except ImportError:
+        extra = "/usr/lib/python3/dist-packages"
+        if extra not in sys.path:
+            sys.path.append(extra)
+        try:
+            from picamera2 import Picamera2
+
+            return Picamera2
+        except ImportError:
+            return None
+
+
+class Picamera2Capture:
+    """CSI Raspberry Pi Camera через Picamera2. Совместимо с VideoCapture: isOpened/read/release."""
+
+    def __init__(self, width: int = 640, height: int = 480) -> None:
+        Picamera2 = _import_picamera2()
+        if Picamera2 is None:
+            raise RuntimeError("picamera2 не установлен (sudo apt install python3-picamera2)")
+        self._cam = Picamera2()
+        size = (max(320, int(width)), max(240, int(height)))
+        cfg = self._cam.create_preview_configuration(main={"size": size, "format": "RGB888"})
+        self._cam.configure(cfg)
+        self._cam.start()
+        time.sleep(0.25)
+        self._opened = True
+
+    def isOpened(self) -> bool:
+        return self._opened
+
+    def set(self, _prop: int, _val: float) -> bool:
+        return True
+
+    def get(self, _prop: int) -> float:
+        return 0.0
+
+    def read(self) -> tuple[bool, np.ndarray | None]:
+        if not self._opened:
+            return False, None
+        try:
+            frame = self._cam.capture_array()
+        except Exception as e:
+            log.debug("Picamera2 capture: %s", e)
+            return False, None
+        if frame is None:
+            return False, None
+        if frame.ndim == 3 and frame.shape[2] == 3:
+            frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+        return True, frame
+
+    def release(self) -> None:
+        self._opened = False
+        try:
+            self._cam.stop()
+        except Exception:
+            pass
+        try:
+            self._cam.close()
+        except Exception:
+            pass
+
+
 class VisionPipeline:
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -1700,10 +1767,40 @@ class VisionPipeline:
             return cap
         return None
 
+    def _open_picamera2(self) -> Picamera2Capture | None:
+        """CSI-камера Raspberry Pi (Pi Camera) через Picamera2 — на Pi 5 нет /dev/video0."""
+        try:
+            cap = Picamera2Capture(width=self._width)
+        except Exception as e:
+            log.warning("Picamera2 недоступна: %s", e)
+            return None
+        if cap.isOpened():
+            log.info("Камера: Picamera2 (CSI Raspberry Pi)")
+            return cap
+        return None
+
     def _open_capture(self) -> (
-        cv2.VideoCapture | HttpMjpegFallbackCapture | FfmpegRtspMjpegPipeCapture | HttpSnapshotPollCapture | None
+        cv2.VideoCapture
+        | HttpMjpegFallbackCapture
+        | FfmpegRtspMjpegPipeCapture
+        | HttpSnapshotPollCapture
+        | Picamera2Capture
+        | None
     ):
         src = self._source.strip()
+        # Опечатка в .env: http://dev/video0 → /dev/video0
+        if src.lower().startswith("http://dev/video") or src.lower().startswith("https://dev/video"):
+            src = "/" + src.split("://", 1)[-1]
+            log.warning("VISION_VIDEO_SOURCE поправлен на %s", src)
+
+        picam_names = {"picamera", "picamera2", "rpi", "csi", "libcamera", "rpicam"}
+        if src.lower() in picam_names:
+            cap = self._open_picamera2()
+            if cap is not None:
+                return cap
+            log.error("VISION_VIDEO_SOURCE=%s, но Picamera2 не открылась (apt: python3-picamera2)", src)
+            return None
+
         if src.startswith("/dev/video"):
             seen: set[str] = set()
             candidates: list[str] = []
@@ -1716,9 +1813,16 @@ class VisionPipeline:
                 if cap is not None:
                     return cap
                 log.warning("V4L2 %s — нет кадра, пробуем следующий узел", dev_path)
+            log.warning(
+                "V4L2 не открылся (%s) — пробуем CSI Picamera2",
+                src,
+            )
+            cap = self._open_picamera2()
+            if cap is not None:
+                return cap
             log.error(
-                "Не удалось открыть камеру (%s). Проверь: groups → video, "
-                "v4l2-ctl --list-devices, часто UGREEN = /dev/video1",
+                "Не удалось открыть камеру (%s). Для CSI: VISION_VIDEO_SOURCE=picamera "
+                "и apt python3-picamera2. Для USB: v4l2-ctl --list-devices.",
                 src,
             )
             return None
