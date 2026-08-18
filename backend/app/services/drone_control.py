@@ -56,6 +56,9 @@ class DroneControlService:
         self._last_base_mode: int | None = None
         self._last_baro: float | None = None
         self._baro_baseline: float | None = None
+        self._last_gps_fix: int = 0
+        self._last_gps_sats: int = 0
+        self._prefer_baro_land: bool = False
 
     def _is_fc_heartbeat(self, msg) -> bool:
         """Только HEARTBEAT автопилота (FMU), не GCS и не IO/companion."""
@@ -537,6 +540,8 @@ class DroneControlService:
             sats = int(getattr(msg, "satellites_visible", 0))
             snap.gps_fix = fix
             snap.gps_sats = sats if sats >= 0 else None
+            self._last_gps_fix = fix
+            self._last_gps_sats = max(0, sats)
             snap.status = "connected"
             snap.updated_at_monotonic = now
             return snap
@@ -836,14 +841,55 @@ class DroneControlService:
             0, 0, 0, 0,
         )
 
+    def _agl_m(self) -> float | None:
+        if self._last_baro is None:
+            return None
+        if self._baro_baseline is not None:
+            return self._last_baro - self._baro_baseline
+        return self._last_baro
+
+    def _gps_fix_ok(self) -> bool:
+        min_sats = max(1, int(settings.ardupilot_min_gps_sats))
+        return self._last_gps_fix >= 3 and self._last_gps_sats >= min_sats
+
+    def _smooth_throttle_us(self, current: int, target: int, *, max_step: int) -> int:
+        step = max(1, int(max_step))
+        if target > current:
+            return min(target, current + step)
+        if target < current:
+            return max(target, current - step)
+        return current
+
     def hold_hover(self, seconds: float = 0.2) -> None:
         """Держать ALT_HOLD: стики центр, газ mid (без пульта override истекает)."""
         deadline = time.monotonic() + max(0.05, seconds)
         with self._lock:
             conn, t = self._require()
             while time.monotonic() < deadline:
-                self._rc_send(conn, t, throttle=1500)
+                self._rc_send(conn, t, throttle=int(settings.ardupilot_baro_hover_us))
                 self._drain_locked(conn, 0.08)
+
+    def hold_position(self, seconds: float = 0.2) -> None:
+        """С GPS — LOITER (точка XY+высота). Без GPS — баро-hover по высоте."""
+        if self._gps_fix_ok():
+            deadline = time.monotonic() + max(0.05, seconds)
+            with self._lock:
+                conn, t = self._require()
+                try:
+                    self._set_mode(conn, t, "LOITER")
+                except Exception:
+                    pass
+                self._drain_locked(conn, 0.12)
+                while time.monotonic() < deadline:
+                    try:
+                        conn.mav.rc_channels_override_send(
+                            t.target_system, t.target_component, 0, 0, 0, 0, 0, 0, 0, 0
+                        )
+                    except Exception:
+                        pass
+                    self._drain_locked(conn, 0.08)
+            return
+        self.hold_hover(seconds)
 
     def nudge(self, direction: str = "forward", seconds: float = 1.5) -> None:
         """Без GPS: лёгкий pitch в ALT_HOLD, высоту держит баро."""
@@ -870,8 +916,10 @@ class DroneControlService:
         Без GPS: ALT_HOLD + RC throttle, высота по барометру (AGL).
         """
         if no_gps:
+            self._prefer_baro_land = True
             self._takeoff_althold(altitude_m)
             return
+        self._prefer_baro_land = False
         alt = float(max(1.0, min(altitude_m, 120.0)))
         with self._lock:
             conn, t = self._require()
@@ -891,6 +939,11 @@ class DroneControlService:
 
     def _takeoff_althold(self, altitude_m: float) -> None:
         target = float(max(0.4, min(altitude_m, 8.0)))
+        hover = int(settings.ardupilot_baro_hover_us)
+        p_gain = int(settings.ardupilot_baro_alt_p_gain)
+        tolerance = float(settings.ardupilot_baro_alt_tolerance_m)
+        stable_s = float(settings.ardupilot_baro_takeoff_stable_s)
+        slew = int(settings.ardupilot_baro_alt_slew_us)
         with self._lock:
             conn, t = self._require()
             try:
@@ -903,20 +956,95 @@ class DroneControlService:
                 self._drain_locked(conn, 3.0)
             if self._last_baro is not None and self._baro_baseline is None:
                 self._baro_baseline = self._last_baro
-            deadline = time.monotonic() + 20.0
+            throttle = hover
+            stable_since: float | None = None
+            deadline = time.monotonic() + 25.0
             while time.monotonic() < deadline:
-                self._rc_send(conn, t, throttle=1680)
-                self._drain_locked(conn, 0.12)
-                if self._last_baro is not None and self._baro_baseline is not None:
-                    if (self._last_baro - self._baro_baseline) >= target * 0.8:
-                        break
-            for _ in range(10):
-                self._rc_send(conn, t, throttle=1500)
-                self._drain_locked(conn, 0.1)
+                agl = self._agl_m()
+                if agl is not None:
+                    err = target - agl
+                    if abs(err) <= tolerance:
+                        if stable_since is None:
+                            stable_since = time.monotonic()
+                        elif time.monotonic() - stable_since >= stable_s:
+                            break
+                    else:
+                        stable_since = None
+                    desired = int(hover + p_gain * err)
+                    desired = max(1200, min(1720, desired))
+                else:
+                    desired = 1680
+                throttle = self._smooth_throttle_us(throttle, desired, max_step=slew)
+                self._rc_send(conn, t, throttle=throttle)
+                self._drain_locked(conn, 0.08)
+            settle_deadline = time.monotonic() + max(0.5, stable_s)
+            while time.monotonic() < settle_deadline:
+                self._rc_send(conn, t, throttle=hover)
+                self._drain_locked(conn, 0.08)
 
-    def land(self) -> None:
+    def _land_althold(self) -> None:
+        """Без GPS: плавно снизить газ по баро, 5 с на idle, затем DISARM."""
+        hover = int(settings.ardupilot_baro_hover_us)
+        min_throttle = int(settings.ardupilot_baro_land_throttle_min)
+        land_s = max(3.0, float(settings.ardupilot_baro_land_seconds))
+        idle_hold_s = max(2.0, float(settings.ardupilot_baro_land_idle_hold_s))
+        ground_m = float(settings.ardupilot_baro_land_ground_m)
+        slew = int(settings.ardupilot_baro_land_slew_us)
+        p_gain = int(settings.ardupilot_baro_land_p_gain)
         with self._lock:
             conn, t = self._require()
+            try:
+                self._set_mode(conn, t, "ALT_HOLD")
+            except Exception:
+                pass
+            self._drain_locked(conn, 0.3)
+            start = time.monotonic()
+            deadline = start + land_s
+            throttle = hover
+            while time.monotonic() < deadline:
+                elapsed = time.monotonic() - start
+                progress = min(1.0, elapsed / land_s)
+                time_throttle = int(hover + (min_throttle - hover) * progress)
+                agl = self._agl_m()
+                if agl is not None:
+                    if agl <= ground_m:
+                        throttle = min_throttle
+                        break
+                    p_throttle = int(hover - p_gain * max(0.0, agl - ground_m))
+                    p_throttle = max(min_throttle, min(hover, p_throttle))
+                    time_throttle = min(time_throttle, p_throttle)
+                throttle = self._smooth_throttle_us(throttle, time_throttle, max_step=slew)
+                self._rc_send(conn, t, throttle=throttle)
+                self._drain_locked(conn, 0.08)
+            idle_deadline = time.monotonic() + idle_hold_s
+            while time.monotonic() < idle_deadline:
+                self._rc_send(conn, t, throttle=min_throttle)
+                self._drain_locked(conn, 0.08)
+            try:
+                conn.mav.rc_channels_override_send(
+                    t.target_system, t.target_component, 0, 0, 0, 0, 0, 0, 0, 0
+                )
+            except Exception:
+                pass
+            self._send_rc_idle(conn, t)
+            self._drain_locked(conn, 0.2)
+        self.disarm()
+
+    def land(self, *, no_gps: bool | None = None) -> None:
+        use_baro = self._prefer_baro_land if no_gps is None else bool(no_gps)
+        if no_gps is None and not use_baro:
+            use_baro = not self._gps_fix_ok()
+        if use_baro:
+            self._land_althold()
+            self._prefer_baro_land = False
+            return
+        with self._lock:
+            conn, t = self._require()
+            try:
+                self._set_mode(conn, t, "LAND")
+            except Exception:
+                pass
+            time.sleep(0.15)
             conn.mav.command_long_send(
                 t.target_system, t.target_component,
                 mavutil.mavlink.MAV_CMD_NAV_LAND,

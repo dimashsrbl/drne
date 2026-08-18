@@ -91,7 +91,11 @@ class MissionEngine:
             raise ValueError("stop action: land, rtl или disarm")
         self._stop_event.set()
         if action == "land":
-            self._drone.land()
+            if isinstance(self._drone, DroneControlService):
+                use_baro = self._drone._prefer_baro_land or not self._drone._gps_fix_ok()
+                self._drone.land(no_gps=use_baro)
+            else:
+                self._drone.land()
         elif action == "rtl":
             self._drone.return_home()
         else:
@@ -136,6 +140,15 @@ class MissionEngine:
             if isinstance(a, (GotoAction, ReturnHomeAction)):
                 return True
             if isinstance(a, TakeoffAction) and not a.no_gps:
+                return True
+        return False
+
+    def _mission_baro_mode(self, actions: list[MissionAction]) -> bool:
+        """Миссия без GPS: баро-взлёт и/или явная баро-посадка."""
+        for a in actions:
+            if isinstance(a, TakeoffAction) and a.no_gps:
+                return True
+            if isinstance(a, LandAction) and a.no_gps:
                 return True
         return False
 
@@ -202,8 +215,15 @@ class MissionEngine:
                     )
 
                 elif isinstance(a, LandAction):
-                    self._drone.land()
-                    self._wait_land(timeout_s=90)
+                    use_baro = a.no_gps or self._mission_baro_mode(actions)
+                    if isinstance(self._drone, DroneControlService):
+                        self._drone.land(no_gps=use_baro)
+                    else:
+                        self._drone.land()
+                    if use_baro and isinstance(self._drone, DroneControlService):
+                        self._wait_disarmed(timeout_s=12.0)
+                    else:
+                        self._wait_land(timeout_s=90)
 
                 elif isinstance(a, ReturnHomeAction):
                     self._drone.return_home()
@@ -213,11 +233,12 @@ class MissionEngine:
                     self._wait_goto(a.lat, a.lon, a.alt, timeout_s=180)
 
                 elif isinstance(a, WaitAction):
-                    if isinstance(self._drone, DroneControlService) and hasattr(self._drone, "hold_hover"):
+                    if isinstance(self._drone, DroneControlService):
+                        hold = self._drone.hold_position if not self._mission_baro_mode(actions) else self._drone.hold_hover
                         end = time.monotonic() + float(a.seconds)
                         while time.monotonic() < end:
                             self._check_stopped()
-                            self._drone.hold_hover(min(0.2, end - time.monotonic()))
+                            hold(min(0.2, end - time.monotonic()))
                     else:
                         self._sleep(float(a.seconds))
 
@@ -287,6 +308,16 @@ class MissionEngine:
                 return
             self._sleep(0.2)
         raise TimeoutError(f"Timeout: takeoff altitude не достигнута (ожидали >= {min_alt:.2f} м)")
+
+    def _wait_disarmed(self, timeout_s: float) -> None:
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            self._check_stopped()
+            snap = self._telemetry.get_snapshot()
+            if snap.armed is False:
+                return
+            self._sleep(0.2)
+        raise TimeoutError("Timeout: FC не снял ARM после баро-посадки")
 
     def _wait_land(self, timeout_s: float) -> None:
         deadline = time.monotonic() + timeout_s

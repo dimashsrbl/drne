@@ -3,7 +3,14 @@ from pydantic import BaseModel, Field
 
 class TakeoffRequest(BaseModel):
     altitude: float = Field(gt=0, le=500, description="Целевая высота взлёта (м)")
-    no_gps: bool = Field(default=False, description="INAV: баро-взлёт без GPS (ALT_HOLD + NAV_TAKEOFF)")
+    no_gps: bool = Field(default=False, description="Баро-взлёт без GPS (ALT_HOLD + RC override)")
+
+
+class LandRequest(BaseModel):
+    no_gps: bool | None = Field(
+        default=None,
+        description="true=баро-посадка; false=NAV_LAND; null=авто по GPS fix",
+    )
 
 
 class GotoRequest(BaseModel):

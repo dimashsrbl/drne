@@ -5,7 +5,7 @@ export type MissionAction =
   | { action: 'arm'; force?: boolean }
   | { action: 'disarm' }
   | { action: 'takeoff'; alt: number; no_gps?: boolean }
-  | { action: 'land' }
+  | { action: 'land'; no_gps?: boolean }
   | { action: 'goto'; lat: number; lon: number; alt: number }
   | { action: 'wait'; seconds: number }
   | { action: 'return_home' }

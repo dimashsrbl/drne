@@ -11,6 +11,7 @@ from app.schemas.drone import (
     CommandResponse,
     DroneProfileResponse,
     GotoRequest,
+    LandRequest,
     ManualControlRequest,
     SafetyGateResponse,
     SetHomeRequest,
@@ -117,9 +118,17 @@ def takeoff(body: TakeoffRequest) -> CommandResponse:
 
 
 @router.post("/land", response_model=CommandResponse)
-def land() -> CommandResponse:
+def land(body: LandRequest | None = None) -> CommandResponse:
     try:
-        get_drone().land()
+        drone = get_drone()
+        no_gps = None if body is None else body.no_gps
+        try:
+            if no_gps is None:
+                drone.land()
+            else:
+                drone.land(no_gps=no_gps)
+        except TypeError:
+            drone.land()
         return CommandResponse(ok=True)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e

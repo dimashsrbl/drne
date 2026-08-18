@@ -160,6 +160,18 @@ class Settings(BaseSettings):
     # Сколько ждать armed=true после ARM (иначе миссия врёт «completed»).
     ardupilot_arm_timeout_s: float = 8.0
     ardupilot_auto_route_min_waypoints: int = 1
+    # Баро ALT_HOLD без GPS (взлёт / посадка через RC override на Pi).
+    ardupilot_baro_hover_us: int = 1500
+    ardupilot_baro_alt_p_gain: int = 45
+    ardupilot_baro_alt_tolerance_m: float = 0.12
+    ardupilot_baro_takeoff_stable_s: float = 1.2
+    ardupilot_baro_alt_slew_us: int = 12
+    ardupilot_baro_land_seconds: float = 10.0
+    ardupilot_baro_land_idle_hold_s: float = 5.0
+    ardupilot_baro_land_throttle_min: int = 1000
+    ardupilot_baro_land_slew_us: int = 7
+    ardupilot_baro_land_ground_m: float = 0.15
+    ardupilot_baro_land_p_gain: int = 35
 
     # ---- Unity симулятор (unity_sim) ---------------------------------
     # Unity слушает команды на udp://<unity_cmd_host>:<unity_cmd_port>

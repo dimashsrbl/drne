@@ -143,7 +143,8 @@ class UnitySimAdapter:
         alt = float(max(0.5, min(float(altitude_m), 120.0)))
         self._send({"type": "takeoff", "alt": alt})
 
-    def land(self) -> None:
+    def land(self, *, no_gps: bool = False) -> None:
+        _ = no_gps
         self._send({"type": "land"})
 
     def return_home(self) -> None:

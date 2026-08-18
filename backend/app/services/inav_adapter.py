@@ -539,7 +539,8 @@ class InavMavlinkAdapter:
                 alt,
             )
 
-    def land(self) -> None:
+    def land(self, *, no_gps: bool = False) -> None:
+        _ = no_gps
         with self._lock:
             conn, ts, tc = self._require_mavlink()
             conn.mav.command_long_send(

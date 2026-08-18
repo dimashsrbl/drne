@@ -31,7 +31,7 @@ const baroPreset: MissionAction[] = [
   { action: 'wait', seconds: 2 },
   { action: 'nudge', direction: 'forward', seconds: 2 },
   { action: 'wait', seconds: 1 },
-  { action: 'land' },
+  { action: 'land', no_gps: true },
 ]
 
 const benchPreset: MissionAction[] = [
@@ -42,6 +42,7 @@ const benchPreset: MissionAction[] = [
 
 function defaultAction(action: ActionName): MissionAction {
   if (action === 'takeoff') return { action, alt: 1, no_gps: true }
+  if (action === 'land') return { action, no_gps: true }
   if (action === 'wait') return { action, seconds: 3 }
   if (action === 'goto') return { action, lat: 0, lon: 0, alt: 3 }
   if (action === 'nudge') return { action, direction: 'forward', seconds: 2 }
@@ -52,8 +53,15 @@ function requiresGps(actions: MissionAction[]) {
   return actions.some((a) => {
     if (a.action === 'goto' || a.action === 'return_home') return true
     if (a.action === 'takeoff' && !a.no_gps) return true
+    if (a.action === 'land' && !a.no_gps) return true
     return false
   })
+}
+
+function missionUsesBaro(actions: MissionAction[]) {
+  return actions.some(
+    (a) => (a.action === 'takeoff' && a.no_gps) || (a.action === 'land' && a.no_gps),
+  )
 }
 
 export function ArduPilotSequencePage() {
@@ -67,6 +75,7 @@ export function ArduPilotSequencePage() {
 
   const gpsReady = (telemetry?.gps_fix ?? 0) >= 3 && (telemetry?.gps_sats ?? 0) >= 6
   const missionNeedsGps = requiresGps(steps)
+  const baroMission = missionUsesBaro(steps)
   const json = useMemo(() => JSON.stringify({ mission: steps }, null, 2), [steps])
 
   useEffect(() => {
@@ -140,9 +149,9 @@ export function ArduPilotSequencePage() {
         <div className="alert" style={{ borderColor: 'rgba(59,130,246,0.5)', background: 'rgba(59,130,246,0.08)' }}>
           <div className="alertTitle" style={{ color: '#93c5fd' }}>MAVLink вместо MSP</div>
           <div className="alertBody">
-            Команды идут: браузер → Pi backend → <code>/dev/serial0</code> → Pixhawk. Порт и throttle_us больше не задаются:
-            высоту, стабилизацию и моторы контролирует ArduPilot. GOTO/RTL — только с GPS.
-            В помещении: пресет «Баро 1 м → вперёд» (ALT_HOLD + барометр, без GPS). Пропеллеры только когда готов.
+            Команды идут: браузер → Pi backend → <code>/dev/serial0</code> → Pixhawk. Без GPS: баро-взлёт/посадка
+            (ALT_HOLD, газ Pi → DISARM). С GPS: NAV_TAKEOFF / LOITER / NAV_LAND. GOTO/RTL — только с GPS 3D.
+            Баро держит <b>высоту</b>, не XY — без GPS дрон может дрейфовать.
           </div>
         </div>
       </section>
@@ -161,7 +170,17 @@ export function ArduPilotSequencePage() {
           <div className="alert" style={{ marginBottom: 12, borderColor: 'rgba(251,191,36,0.55)' }}>
             <div className="alertTitle" style={{ color: '#fbbf24' }}>Нет GPS 3D</div>
             <div className="alertBody">
-              Для GPS-миссии нужно ≥6 спутников и fix 3D. Без GPS бери «Баро 1 м → вперёд» или «Bench ARM → DISARM».
+              Для GPS-миссии нужно ≥6 спутников и fix 3D. Без GPS — пресет «Баро 1 м → вперёд» или Bench ARM.
+            </div>
+          </div>
+        ) : null}
+
+        {baroMission ? (
+          <div className="alert" style={{ marginBottom: 12, borderColor: 'rgba(96,165,250,0.45)' }}>
+            <div className="alertTitle" style={{ color: '#93c5fd' }}>Баро-режим (без GPS)</div>
+            <div className="alertBody">
+              Посадка: плавное снижение газа ~10 с → idle 5 с → DISARM. Погрешность баро ±0.1–0.2 м — норма.
+              STOP → LAND в этом режиме тоже баро-посадка, не NAV_LAND.
             </div>
           </div>
         ) : null}
@@ -213,6 +232,19 @@ export function ArduPilotSequencePage() {
                       </select>
                     </label>
                   </>
+                ) : null}
+
+                {step.action === 'land' ? (
+                  <label className="field" style={{ maxWidth: 200 }}>
+                    <span>Посадка</span>
+                    <select
+                      value={step.no_gps ? '1' : '0'}
+                      onChange={(e) => updateStep(index, { ...step, no_gps: e.target.value === '1' })}
+                    >
+                      <option value="1">баро (без GPS)</option>
+                      <option value="0">NAV_LAND (GPS)</option>
+                    </select>
+                  </label>
                 ) : null}
 
                 {step.action === 'nudge' ? (
@@ -295,10 +327,15 @@ export function ArduPilotSequencePage() {
           >
             START MISSION
           </button>
-          <button className="btn danger" disabled={!!busy} onClick={() => void run('land', () => stop('land'))}>
-            STOP → LAND
+          <button
+            className="btn danger"
+            disabled={!!busy}
+            title={gpsReady ? 'NAV_LAND на Pixhawk' : 'Баро: газ ↓ ~10 с → idle 5 с → DISARM'}
+            onClick={() => void run('land', () => stop('land'))}
+          >
+            STOP → LAND{gpsReady ? '' : ' (баро)'}
           </button>
-          <button className="btn" disabled={!!busy || !gpsReady} onClick={() => void run('rtl', () => stop('rtl'))}>
+          <button className="btn" disabled={!!busy || !gpsReady} title="Только с GPS 3D" onClick={() => void run('rtl', () => stop('rtl'))}>
             STOP → RTL
           </button>
           <button

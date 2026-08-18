@@ -28,6 +28,8 @@ class TakeoffAction(ActionBase):
 
 class LandAction(ActionBase):
     action: Literal["land"]
+    # Баро-посадка ALT_HOLD (газ ↓ → idle 5 с → DISARM). Без GPS NAV_LAND не работает.
+    no_gps: bool = Field(default=False)
 
 
 class ReturnHomeAction(ActionBase):

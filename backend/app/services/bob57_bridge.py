@@ -142,7 +142,8 @@ class Bob57BridgeAdapter:
         _ = (altitude_m, no_gps)
         raise RuntimeError("Автоматический takeoff для BOB57 bridge отключён. Первый полёт выполняй вручную с пульта.")
 
-    def land(self) -> None:
+    def land(self, *, no_gps: bool = False) -> None:
+        _ = no_gps
         raise RuntimeError("Автоматическая посадка для BOB57 bridge отключена до миграции на ArduPilot.")
 
     def return_home(self) -> None:
