@@ -59,6 +59,8 @@ class DroneControlService:
         self._last_gps_fix: int = 0
         self._last_gps_sats: int = 0
         self._prefer_baro_land: bool = False
+        self._baro_hover_us: int | None = None
+        self._baro_climb_us: int | None = None
 
     def _is_fc_heartbeat(self, msg) -> bool:
         """Только HEARTBEAT автопилота (FMU), не GCS и не IO/companion."""
@@ -762,6 +764,8 @@ class DroneControlService:
         wait_s = float(timeout_s if timeout_s is not None else settings.ardupilot_arm_timeout_s)
         self._recent_texts.clear()
         self._last_arm_ack = None
+        self._baro_hover_us = None
+        self._baro_climb_us = None
         with self._lock:
             conn, t = self._require()
             # Снять RC override / газ, иначе FC считает что летит и обычный DISARM = FAILED.
@@ -860,13 +864,28 @@ class DroneControlService:
             return max(target, current - step)
         return current
 
+    def _apply_baro_power(self, hover_us: int | None, climb_us: int | None) -> tuple[int, int]:
+        hover = int(hover_us if hover_us is not None else settings.ardupilot_baro_hover_us)
+        climb = int(climb_us if climb_us is not None else settings.ardupilot_baro_climb_us)
+        hover = max(1200, min(1800, hover))
+        climb = max(hover + 20, min(1900, climb))
+        self._baro_hover_us = hover
+        self._baro_climb_us = climb
+        return hover, climb
+
+    def _active_hover_us(self) -> int:
+        if self._baro_hover_us is not None:
+            return int(self._baro_hover_us)
+        return int(settings.ardupilot_baro_hover_us)
+
     def hold_hover(self, seconds: float = 0.2) -> None:
         """Держать ALT_HOLD: стики центр, газ mid (без пульта override истекает)."""
         deadline = time.monotonic() + max(0.05, seconds)
+        hover = self._active_hover_us()
         with self._lock:
             conn, t = self._require()
             while time.monotonic() < deadline:
-                self._rc_send(conn, t, throttle=int(settings.ardupilot_baro_hover_us))
+                self._rc_send(conn, t, throttle=hover)
                 self._drain_locked(conn, 0.08)
 
     def hold_position(self, seconds: float = 0.2) -> None:
@@ -904,22 +923,31 @@ class DroneControlService:
             except Exception:
                 pass
             while time.monotonic() < deadline:
-                self._rc_send(conn, t, pitch=pitch, throttle=1500)
+                self._rc_send(conn, t, pitch=pitch, throttle=self._active_hover_us())
                 self._drain_locked(conn, 0.08)
+            hover = self._active_hover_us()
             for _ in range(6):
-                self._rc_send(conn, t, throttle=1500)
+                self._rc_send(conn, t, throttle=hover)
                 self._drain_locked(conn, 0.08)
 
-    def takeoff(self, altitude_m: float, no_gps: bool = False) -> None:
+    def takeoff(
+        self,
+        altitude_m: float,
+        no_gps: bool = False,
+        hover_us: int | None = None,
+        climb_us: int | None = None,
+    ) -> None:
         """
         GPS: GUIDED + NAV_TAKEOFF.
         Без GPS: ALT_HOLD + RC throttle, высота по барометру (AGL).
         """
         if no_gps:
             self._prefer_baro_land = True
-            self._takeoff_althold(altitude_m)
+            self._takeoff_althold(altitude_m, hover_us=hover_us, climb_us=climb_us)
             return
         self._prefer_baro_land = False
+        self._baro_hover_us = None
+        self._baro_climb_us = None
         alt = float(max(1.0, min(altitude_m, 120.0)))
         with self._lock:
             conn, t = self._require()
@@ -937,9 +965,14 @@ class DroneControlService:
                 alt,
             )
 
-    def _takeoff_althold(self, altitude_m: float) -> None:
+    def _takeoff_althold(
+        self,
+        altitude_m: float,
+        hover_us: int | None = None,
+        climb_us: int | None = None,
+    ) -> None:
         target = float(max(0.4, min(altitude_m, 8.0)))
-        hover = int(settings.ardupilot_baro_hover_us)
+        hover, climb = self._apply_baro_power(hover_us, climb_us)
         p_gain = int(settings.ardupilot_baro_alt_p_gain)
         tolerance = float(settings.ardupilot_baro_alt_tolerance_m)
         stable_s = float(settings.ardupilot_baro_takeoff_stable_s)
@@ -971,9 +1004,9 @@ class DroneControlService:
                     else:
                         stable_since = None
                     desired = int(hover + p_gain * err)
-                    desired = max(1200, min(1720, desired))
+                    desired = max(1200, min(climb, desired))
                 else:
-                    desired = 1680
+                    desired = min(climb, hover + 180)
                 throttle = self._smooth_throttle_us(throttle, desired, max_step=slew)
                 self._rc_send(conn, t, throttle=throttle)
                 self._drain_locked(conn, 0.08)
@@ -984,7 +1017,7 @@ class DroneControlService:
 
     def _land_althold(self) -> None:
         """Без GPS: плавно снизить газ по баро, 5 с на idle, затем DISARM."""
-        hover = int(settings.ardupilot_baro_hover_us)
+        hover = self._active_hover_us()
         min_throttle = int(settings.ardupilot_baro_land_throttle_min)
         land_s = max(3.0, float(settings.ardupilot_baro_land_seconds))
         idle_hold_s = max(2.0, float(settings.ardupilot_baro_land_idle_hold_s))

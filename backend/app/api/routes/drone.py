@@ -111,7 +111,16 @@ def disarm() -> CommandResponse:
 @router.post("/takeoff", response_model=CommandResponse)
 def takeoff(body: TakeoffRequest) -> CommandResponse:
     try:
-        get_drone().takeoff(body.altitude, no_gps=body.no_gps)
+        drone = get_drone()
+        try:
+            drone.takeoff(
+                body.altitude,
+                no_gps=body.no_gps,
+                hover_us=body.hover_us,
+                climb_us=body.climb_us,
+            )
+        except TypeError:
+            drone.takeoff(body.altitude, no_gps=body.no_gps)
         return CommandResponse(ok=True)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e

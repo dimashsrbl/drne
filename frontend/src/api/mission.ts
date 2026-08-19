@@ -4,7 +4,7 @@ import { apiFetch } from './shared'
 export type MissionAction =
   | { action: 'arm'; force?: boolean }
   | { action: 'disarm' }
-  | { action: 'takeoff'; alt: number; no_gps?: boolean }
+  | { action: 'takeoff'; alt: number; no_gps?: boolean; hover_us?: number; climb_us?: number }
   | { action: 'land'; no_gps?: boolean }
   | { action: 'goto'; lat: number; lon: number; alt: number }
   | { action: 'wait'; seconds: number }

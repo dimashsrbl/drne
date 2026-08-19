@@ -4,6 +4,8 @@ from pydantic import BaseModel, Field
 class TakeoffRequest(BaseModel):
     altitude: float = Field(gt=0, le=500, description="Целевая высота взлёта (м)")
     no_gps: bool = Field(default=False, description="Баро-взлёт без GPS (ALT_HOLD + RC override)")
+    hover_us: int | None = Field(default=None, ge=1200, le=1800)
+    climb_us: int | None = Field(default=None, ge=1300, le=1900)
 
 
 class LandRequest(BaseModel):

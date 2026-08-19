@@ -206,7 +206,15 @@ class MissionEngine:
 
                 elif isinstance(a, TakeoffAction):
                     baseline = self._telemetry.get_snapshot().alt
-                    self._drone.takeoff(a.alt, no_gps=a.no_gps)
+                    try:
+                        self._drone.takeoff(
+                            a.alt,
+                            no_gps=a.no_gps,
+                            hover_us=a.hover_us,
+                            climb_us=a.climb_us,
+                        )
+                    except TypeError:
+                        self._drone.takeoff(a.alt, no_gps=a.no_gps)
                     self._wait_takeoff_complete(
                         target_m=a.alt,
                         no_gps=a.no_gps,

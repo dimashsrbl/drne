@@ -162,6 +162,7 @@ class Settings(BaseSettings):
     ardupilot_auto_route_min_waypoints: int = 1
     # Баро ALT_HOLD без GPS (взлёт / посадка через RC override на Pi).
     ardupilot_baro_hover_us: int = 1500
+    ardupilot_baro_climb_us: int = 1720
     ardupilot_baro_alt_p_gain: int = 45
     ardupilot_baro_alt_tolerance_m: float = 0.12
     ardupilot_baro_takeoff_stable_s: float = 1.2

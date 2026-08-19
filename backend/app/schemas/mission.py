@@ -22,8 +22,10 @@ class DisarmAction(ActionBase):
 class TakeoffAction(ActionBase):
     action: Literal["takeoff"]
     alt: float = Field(gt=0, le=500)
-    # INAV: без GPS POSHOLD недоступен — взлёт через ALT_HOLD + NAV_TAKEOFF (нужен барометр).
-    no_gps: bool = Field(default=False, description="Тестовый взлёт без GPS (INAV: ALT_HOLD + баро)")
+    no_gps: bool = Field(default=False, description="Баро-взлёт без GPS (ALT_HOLD + RC override)")
+    # Только no_gps: mid-stick hover и потолок газа при наборе (µs, как в Betaflight).
+    hover_us: int | None = Field(default=None, ge=1200, le=1800)
+    climb_us: int | None = Field(default=None, ge=1300, le=1900)
 
 
 class LandAction(ActionBase):

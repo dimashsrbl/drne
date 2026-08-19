@@ -27,7 +27,7 @@ const flightPreset: MissionAction[] = [
 
 const baroPreset: MissionAction[] = [
   { action: 'arm', force: true },
-  { action: 'takeoff', alt: 1, no_gps: true },
+  { action: 'takeoff', alt: 1, no_gps: true, hover_us: 1500, climb_us: 1720 },
   { action: 'wait', seconds: 2 },
   { action: 'nudge', direction: 'forward', seconds: 2 },
   { action: 'wait', seconds: 1 },
@@ -41,7 +41,7 @@ const benchPreset: MissionAction[] = [
 ]
 
 function defaultAction(action: ActionName): MissionAction {
-  if (action === 'takeoff') return { action, alt: 1, no_gps: true }
+  if (action === 'takeoff') return { action, alt: 1, no_gps: true, hover_us: 1500, climb_us: 1720 }
   if (action === 'land') return { action, no_gps: true }
   if (action === 'wait') return { action, seconds: 3 }
   if (action === 'goto') return { action, lat: 0, lon: 0, alt: 3 }
@@ -179,8 +179,8 @@ export function ArduPilotSequencePage() {
           <div className="alert" style={{ marginBottom: 12, borderColor: 'rgba(96,165,250,0.45)' }}>
             <div className="alertTitle" style={{ color: '#93c5fd' }}>Баро-режим (без GPS)</div>
             <div className="alertBody">
-              Посадка: плавное снижение газа ~10 с → idle 5 с → DISARM. Погрешность баро ±0.1–0.2 м — норма.
-              STOP → LAND в этом режиме тоже баро-посадка, не NAV_LAND.
+              Посадка: плавное снижение газа ~10 с → idle 5 с → DISARM. Если не отрывается — подними
+              «газ hover» (1580–1650) и «макс. газ» (1750–1850) на шаге взлёта.
             </div>
           </div>
         ) : null}
@@ -231,6 +231,32 @@ export function ArduPilotSequencePage() {
                         <option value="0">нет — GUIDED/GPS</option>
                       </select>
                     </label>
+                    {step.no_gps ? (
+                      <>
+                        <label className="field" style={{ maxWidth: 140 }}>
+                          <span>Газ hover, µs</span>
+                          <input
+                            type="number"
+                            min={1200}
+                            max={1800}
+                            step={10}
+                            value={step.hover_us ?? 1500}
+                            onChange={(e) => updateStep(index, { ...step, hover_us: Number(e.target.value) })}
+                          />
+                        </label>
+                        <label className="field" style={{ maxWidth: 140 }}>
+                          <span>Макс. газ, µs</span>
+                          <input
+                            type="number"
+                            min={1300}
+                            max={1900}
+                            step={10}
+                            value={step.climb_us ?? 1720}
+                            onChange={(e) => updateStep(index, { ...step, climb_us: Number(e.target.value) })}
+                          />
+                        </label>
+                      </>
+                    ) : null}
                   </>
                 ) : null}
 
